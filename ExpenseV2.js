@@ -452,6 +452,7 @@ async function handleCallback(cq, env) {
   await tg(env, "answerCallbackQuery", { callback_query_id: cq.id });
   const msg = cq.message;
   if (!msg) return;
+  if (!(await claimCallbackAction(env, cq))) return;
   const [ns, action, ...args] = String(cq.data || "").split(":");
 
   if (ns === "m" && action === "noop") return;
@@ -634,10 +635,16 @@ async function handleTxCallback(env, msg, action, args) {
       draft: { type, status: "ثبت‌شده", currency: DEFAULT_CURRENCY },
     };
     await setState(env, chatId, state);
+    await editPanel(
+      env,
+      msg,
+      `${TYPE_META[type].icon} <b>${esc(type)} انتخاب شد.</b>`,
+      { inline_keyboard: [[btn("❌ لغو", "tx:cancel")]] },
+    );
     return send(
       env,
       chatId,
-      `${TYPE_META[type].icon} <b>${esc(type)}</b>\n\n📝 عنوان تراکنش را بنویس.`,
+      `📝 عنوان ${esc(type)} را وارد کن.`,
       {
         reply_markup: {
           force_reply: true,
@@ -3098,6 +3105,19 @@ async function clearState(env, chatId) {
   await env.DB.prepare("DELETE FROM kv WHERE k=?")
     .bind(`state:${chatId}`)
     .run();
+}
+
+async function claimCallbackAction(env, cq) {
+  await ensureStateDb(env);
+  const now = Date.now();
+  const key = `callback:${cq.message.chat.id}:${cq.message.message_id}:${cq.data}`;
+  const result = await env.DB.prepare(
+    "INSERT INTO kv(k,v,exp) VALUES(?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v,exp=excluded.exp WHERE kv.exp < ?",
+  )
+    .bind(key, "1", now + 4_000, now)
+    .run();
+  const changes = result.meta?.changes;
+  return typeof changes !== "number" || changes === 1;
 }
 
 async function rememberMessage(env, chatId, msg) {
