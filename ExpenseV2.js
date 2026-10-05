@@ -1650,9 +1650,14 @@ async function advanceNew(env, chatId, msg, st) {
     if (st.props[p.name] === undefined) continue;
     const money = isMoneyField(st.ent, p.name);
     const displayName =
-      st.ent === "a" && p.name === "مانده اولیه" ? "موجودی حساب" : p.name;
+      st.ent === "a" && ["مانده اولیه", ACC.balance].includes(p.name)
+        ? "موجودی حساب"
+        : p.name;
+    const value = money
+      ? fmt(st.props[p.name]?.number)
+      : (st.labels[p.name] ?? "");
     lines.push(
-      `${esc(displayName)}: <b>${esc(st.labels[p.name] ?? "")}</b>${money ? " تومان" : ""}`,
+      `${esc(displayName)}: <b>${esc(value)}</b>${money ? " تومان" : ""}`,
     );
   }
   return panel(env, chatId, msg, lines.join("\n"), {
