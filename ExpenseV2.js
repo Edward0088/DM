@@ -1615,6 +1615,14 @@ async function startNew(env, chatId, msg, e) {
       st.labels[p.name] = "✅";
     }
   }
+  if (e === "a") {
+    for (const p of schema.props) {
+      if (!isAccountOpeningDateField(p)) continue;
+      const createdOn = todayTehran();
+      st.props[p.name] = { date: { start: createdOn } };
+      st.labels[p.name] = createdOn;
+    }
+  }
   return advanceNew(env, chatId, msg, st);
 }
 
@@ -2534,8 +2542,17 @@ function isHiddenField(e, p) {
   if (/^(?:id|شناسه|شناسه‌ی|شناسه ی)(?:\s|$)/i.test(name)) return true;
   if (/(?:database|table|notion)\s*id/i.test(name)) return true;
   if (/ریال/.test(name)) return true;
+  if (e === "a" && isAccountOpeningDateField(p)) return true;
   if (e === "a" && p.type === "relation") return true;
   return false;
+}
+
+function isAccountOpeningDateField(p) {
+  const name = String(p.name || "").trim();
+  return (
+    p.type === "date" &&
+    /(?:تاریخ.*(?:مانده|موجودی)|(?:مانده|موجودی).*تاریخ)/.test(name)
+  );
 }
 
 /* ============================== Notion API ============================== */
