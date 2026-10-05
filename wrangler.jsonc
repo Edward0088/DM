@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
+  "name": "expense-bot",
+  "main": "ExpenseV2.js",
+  "compatibility_date": "2026-10-05",
+  "keep_vars": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "expense-bot-settings",
+      "database_id": "c48f59d6-48f4-49c1-9d6c-dc4ac0f12420"
+    }
+  ],
+  "browser": {
+    "binding": "BROWSER"
+  }
+}
