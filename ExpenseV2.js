@@ -1449,7 +1449,9 @@ async function showItem(env, chatId, msg, e, id, note = "") {
 async function askField(env, chatId, msg, st, p, mode) {
   st.propName = p.name;
   st.opts = null;
-  const head = `${mode === "new" ? "➕" : "✏️"} <b>${esc(p.name)}</b>`;
+  const displayName =
+    st.ent === "a" && p.name === "مانده اولیه" ? "موجودی حساب" : p.name;
+  const head = `${mode === "new" ? "➕" : "✏️"} <b>${esc(displayName)}</b>`;
   const isMoney = p.type === "number" && ENT[st.ent].money.includes(p.name);
 
   const tail = [];
@@ -1635,8 +1637,10 @@ async function advanceNew(env, chatId, msg, st) {
   for (const p of schema.editable) {
     if (st.props[p.name] === undefined) continue;
     const money = ENT[st.ent].money.includes(p.name);
+    const displayName =
+      st.ent === "a" && p.name === "مانده اولیه" ? "موجودی حساب" : p.name;
     lines.push(
-      `${esc(p.name)}: <b>${esc(st.labels[p.name] ?? "")}</b>${money ? " تومان" : ""}`,
+      `${esc(displayName)}: <b>${esc(st.labels[p.name] ?? "")}</b>${money ? " تومان" : ""}`,
     );
   }
   return panel(env, chatId, msg, lines.join("\n"), {
