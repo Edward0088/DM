@@ -1414,7 +1414,7 @@ async function showItem(env, chatId, msg, e, id, note = "") {
 
   for (const p of schema.props) {
     if (p.type === "title" || isHiddenField(e, p)) continue;
-    const money = ent.money.includes(p.name);
+    const money = isMoneyField(e, p.name);
     let text;
     if (money && (p.type === "formula" || p.type === "rollup")) {
       text = fmt(await exactNumber(env, page, p.name));
@@ -1452,7 +1452,7 @@ async function askField(env, chatId, msg, st, p, mode) {
   const displayName =
     st.ent === "a" && p.name === "مانده اولیه" ? "موجودی حساب" : p.name;
   const head = `${mode === "new" ? "➕" : "✏️"} <b>${esc(displayName)}</b>`;
-  const isMoney = p.type === "number" && ENT[st.ent].money.includes(p.name);
+  const isMoney = p.type === "number" && isMoneyField(st.ent, p.name);
 
   const tail = [];
   if (mode === "new" && p.type !== "title") tail.push(btn("⏭ رد کردن", "x:z"));
@@ -1518,6 +1518,10 @@ async function askField(env, chatId, msg, st, p, mode) {
     email: "ایمیل را بفرست.",
     phone_number: "شماره را بفرست.",
   };
+  if (st.ent === "a" && p.name === "مانده اولیه") {
+    hints.number =
+      "موجودی حساب را به <b>تومان</b> بفرست. مثال: <code>۲۵۰٬۰۰۰ تومان</code>";
+  }
   st.step = "text";
   await setState(env, chatId, st);
   return panel(
@@ -1644,7 +1648,7 @@ async function advanceNew(env, chatId, msg, st) {
   ];
   for (const p of schema.editable) {
     if (st.props[p.name] === undefined) continue;
-    const money = ENT[st.ent].money.includes(p.name);
+    const money = isMoneyField(st.ent, p.name);
     const displayName =
       st.ent === "a" && p.name === "مانده اولیه" ? "موجودی حساب" : p.name;
     lines.push(
@@ -1671,7 +1675,7 @@ function parseFieldInput(e, p, text) {
     case "phone_number":
       return { payload: { phone_number: toEnDigits(t) }, label: t };
     case "number": {
-      if (ENT[e].money.includes(p.name)) {
+      if (isMoneyField(e, p.name)) {
         const rial = parseAmountStrict(t);
         if (!Number.isFinite(rial) || rial < 0)
           return { error: "مبلغ نامعتبر است (تومان). مثال: 250000" };
@@ -2104,7 +2108,7 @@ async function buildDetail(env, e, range) {
   if (!ent.date) {
     const need = cols.filter(
       (p) =>
-        ent.money.includes(p.name) &&
+        isMoneyField(e, p.name) &&
         (p.type === "rollup" || p.type === "formula"),
     );
     const jobs = [];
@@ -2122,14 +2126,14 @@ async function buildDetail(env, e, range) {
   }
 
   const header = cols.map((p) =>
-    ent.money.includes(p.name) ? `${p.name} (تومان)` : p.name,
+    isMoneyField(e, p.name) ? `${p.name} (تومان)` : p.name,
   );
   const lines = [csvLine(header)];
   for (const pg of pages) {
     lines.push(
       csvLine(
         cols.map((p) => {
-          const money = ent.money.includes(p.name);
+          const money = isMoneyField(e, p.name);
           const key = `${pg.id}|${p.name}`;
           if (money && exact.has(key)) return tomanPlain(exact.get(key));
           return cellText(pg, p, { money, rel, csv: true });
@@ -2545,6 +2549,10 @@ function isHiddenField(e, p) {
   if (e === "a" && isAccountOpeningDateField(p)) return true;
   if (e === "a" && p.type === "relation") return true;
   return false;
+}
+
+function isMoneyField(e, name) {
+  return ENT[e].money.includes(name) || (e === "a" && name === "مانده اولیه");
 }
 
 function isAccountOpeningDateField(p) {
