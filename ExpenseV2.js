@@ -363,15 +363,20 @@ async function handleText(msg, env) {
     return askTxAmount(env, chatId, state);
   }
 
+  if (state.flow === "tx" && state.step === "amount-input") {
+    const amount = parseScaledAmount(text, state.moneyUnitFactor);
+    if (!(amount > 0))
+      return send(env, chatId, scaledAmountError(state.moneyUnitFactor));
+    state.pendingAmount = amount;
+    state.step = "amount-review";
+    await setState(env, chatId, state);
+    return sendAmountReview(env, chatId, amount, "tx:amount-ok", "tx:amount-edit");
+  }
+
+  // سازگاری با ورودی‌هایی که پیش از انتشار این مسیر شروع شده‌اند.
   if (state.flow === "tx" && state.step === "amount") {
     const amount = parseAmountOnly(text);
-    if (!(amount > 0)) {
-      return send(
-        env,
-        chatId,
-        "❌ مبلغ را به تومان وارد کن. نمونه‌ها:\n<code>۵۵ هزار تومان</code>\n<code>55000</code>\n<code>2.5 میلیون</code>\n<code>۲ میلیون و پانصد</code>",
-      );
-    }
+    if (!(amount > 0)) return send(env, chatId, "❌ مبلغ نامعتبر است.");
     state.draft.amount = amount;
     await setState(env, chatId, state);
     return continueTxFlow(env, chatId, state);
@@ -389,10 +394,18 @@ async function handleText(msg, env) {
   }
 
   // ---- تخصیص ----
+  if (state.flow === "allocation" && state.step === "amount-input") {
+    const amount = parseScaledAmount(text, state.moneyUnitFactor);
+    if (!(amount > 0))
+      return send(env, chatId, scaledAmountError(state.moneyUnitFactor));
+    state.pendingAmount = amount;
+    state.step = "amount-review";
+    await setState(env, chatId, state);
+    return sendAmountReview(env, chatId, amount, "al:amount-ok", "al:amount-edit");
+  }
   if (state.flow === "allocation" && state.step === "amount") {
     const amount = parseAmountOnly(text);
-    if (!(amount > 0))
-      return send(env, chatId, "❌ مبلغ نامعتبر است (تومان). مثال: 500000");
+    if (!(amount > 0)) return send(env, chatId, "❌ مبلغ نامعتبر است.");
     state.draft.amount = amount;
     state.step = "confirm";
     await setState(env, chatId, state);
@@ -402,7 +415,7 @@ async function handleText(msg, env) {
   // ---- ویرایش / ایجاد (CRUD) ----
   if (
     (state.flow === "edit" || state.flow === "new") &&
-    state.step === "text"
+    ["text", "money-input"].includes(state.step)
   ) {
     return handleFieldText(env, chatId, state, text);
   }
@@ -536,6 +549,76 @@ function txTypeKeyboard() {
   };
 }
 
+function amountUnitFactor(unit) {
+  if (unit === "thousand") return 1_000;
+  if (unit === "million") return 1_000_000;
+  return 0;
+}
+
+function scaledAmountPrompt(factor) {
+  if (factor === 1_000_000)
+    return "💰 مبلغ را به <b>میلیون تومان</b> وارد کن.\n\nمثلاً برای ۳۲ میلیون تومان، عدد <code>۳۲</code> را وارد کن.";
+  return "💰 مبلغ را به <b>هزار تومان</b> وارد کن.\n\nمثلاً برای ۵۰۰ هزار تومان، عدد <code>۵۰۰</code> را وارد کن.";
+}
+
+function scaledAmountError(factor) {
+  return `❌ فقط عدد را وارد کن؛ مثلاً <code>${factor === 1_000_000 ? "۳۲" : "۵۰۰"}</code>.`;
+}
+
+async function showMoneyUnitChoice(
+  env,
+  chatId,
+  msg,
+  namespace,
+  cancelCallback,
+  title = "💰 واحد مبلغ را انتخاب کن:",
+  extraRows = [],
+) {
+  return panel(env, chatId, msg, title, {
+    inline_keyboard: [
+      [
+        btn("هزار تومان", `${namespace}:unit:thousand`),
+        btn("میلیون تومان", `${namespace}:unit:million`),
+      ],
+      ...extraRows.filter((row) => row.length),
+      [btn("❌ لغو", cancelCallback)],
+    ],
+  });
+}
+
+function sendScaledAmountPrompt(env, chatId, factor) {
+  return send(env, chatId, scaledAmountPrompt(factor), {
+    reply_markup: {
+      force_reply: true,
+      input_field_placeholder: factor === 1_000_000 ? "مثلاً ۳۲ یا ۱٫۵" : "مثلاً ۵۰۰ یا ۱٫۵",
+    },
+  });
+}
+
+function parseScaledAmount(text, factor) {
+  if (![1_000, 1_000_000].includes(factor)) return NaN;
+  const normalized = toEnDigits(String(text).trim()).replace(/,/g, "");
+  if (!/^\d+(?:\.\d{1,3})?$/.test(normalized)) return NaN;
+  const value = Number(normalized);
+  if (!(value > 0)) return NaN;
+  return Math.round(value * factor * RIAL_PER_TOMAN);
+}
+
+function sendAmountReview(env, chatId, amount, confirmAction, editAction) {
+  return send(
+    env,
+    chatId,
+    `💰 <b>مبلغ شما:</b>\n\n<b>${fmt(amount)} تومان</b>`,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [btn("✅ تأیید", confirmAction), btn("✏️ اصلاح", editAction)],
+        ],
+      },
+    },
+  );
+}
+
 /* ============================== Transaction flow ============================== */
 
 async function handleTxCallback(env, msg, action, args) {
@@ -592,21 +675,44 @@ async function handleTxCallback(env, msg, action, args) {
     return continueTxFlow(env, chatId, state, msg);
   }
 
-  if (action === "custom") {
-    state.step = "amount";
+  if (action === "unit") {
+    state.moneyUnitFactor = amountUnitFactor(args[0]);
+    if (!state.moneyUnitFactor) return;
+    state.step = "amount-input";
     await setState(env, chatId, state);
     await editPanel(
       env,
       msg,
-      "✍️ <b>مبلغ دلخواه</b>\nمبلغ را به تومان بنویس؛ مثل <code>۵۵ هزار</code> یا <code>۲ میلیون و پانصد</code>.",
+      scaledAmountPrompt(state.moneyUnitFactor),
       { inline_keyboard: [[btn("❌ لغو", "tx:cancel")]] },
     );
-    return send(env, chatId, "مبلغ را بفرست 👇", {
-      reply_markup: {
-        force_reply: true,
-        input_field_placeholder: "مثلاً ۵۵ هزار تومان",
-      },
-    });
+    return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
+  }
+
+  if (action === "amount-edit") {
+    state.step = "amount-input";
+    await setState(env, chatId, state);
+    await editPanel(
+      env,
+      msg,
+      scaledAmountPrompt(state.moneyUnitFactor),
+      { inline_keyboard: [[btn("❌ لغو", "tx:cancel")]] },
+    );
+    return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
+  }
+
+  if (action === "amount-ok" && state.step === "amount-review") {
+    state.draft.amount = state.pendingAmount;
+    delete state.pendingAmount;
+    state.step = "amount-choice";
+    await setState(env, chatId, state);
+    return continueTxFlow(env, chatId, state, msg);
+  }
+
+  if (action === "custom") {
+    state.step = "amount-unit";
+    await setState(env, chatId, state);
+    return showMoneyUnitChoice(env, chatId, msg, "tx", "tx:cancel");
   }
 
   if (action === "skip") {
@@ -1051,6 +1157,40 @@ async function handleAllocationCallback(env, msg, action, args) {
     return editPanel(env, msg, "این عملیات منقضی شده.", backHome());
   }
 
+  if (action === "unit") {
+    state.moneyUnitFactor = amountUnitFactor(args[0]);
+    if (!state.moneyUnitFactor) return;
+    state.step = "amount-input";
+    await setState(env, chatId, state);
+    await editPanel(
+      env,
+      msg,
+      scaledAmountPrompt(state.moneyUnitFactor),
+      { inline_keyboard: [[btn("❌ لغو", "al:cancel")]] },
+    );
+    return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
+  }
+
+  if (action === "amount-edit") {
+    state.step = "amount-input";
+    await setState(env, chatId, state);
+    await editPanel(
+      env,
+      msg,
+      scaledAmountPrompt(state.moneyUnitFactor),
+      { inline_keyboard: [[btn("❌ لغو", "al:cancel")]] },
+    );
+    return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
+  }
+
+  if (action === "amount-ok" && state.step === "amount-review") {
+    state.draft.amount = state.pendingAmount;
+    delete state.pendingAmount;
+    state.step = "confirm";
+    await setState(env, chatId, state);
+    return sendAllocationConfirm(env, chatId, state, msg);
+  }
+
   const boxes = await listBoxes(env);
 
   if (action === "from") {
@@ -1064,11 +1204,9 @@ async function handleAllocationCallback(env, msg, action, args) {
   if (action === "to") {
     state.draft.toBox = boxes.find((x) => idEq(x.id, args[0]));
     if (!state.draft.toBox) return;
-    state.step = "amount";
+    state.step = "amount-unit";
     await setState(env, chatId, state);
-    return send(env, chatId, "🎯 مبلغ تخصیص را به <b>تومان</b> بفرست:", {
-      reply_markup: { force_reply: true, input_field_placeholder: "500000" },
-    });
+    return showMoneyUnitChoice(env, chatId, msg, "al", "al:cancel");
   }
 
   if (action === "save") {
@@ -1100,19 +1238,18 @@ async function allocationChooseBox(env, msg, role, exclude) {
   );
 }
 
-function sendAllocationConfirm(env, chatId, state) {
+function sendAllocationConfirm(env, chatId, state, msg = null) {
   const d = state.draft;
-  return send(
+  return panel(
     env,
     chatId,
+    msg,
     `🎯 <b>تأیید تخصیص</b>\n\nاز: ${esc(d.fromBox.name)}\nبه: ${esc(d.toBox.name)}\nمبلغ: <b>${fmt(d.amount)} تومان</b>`,
     {
-      reply_markup: {
-        inline_keyboard: [
-          [btn("✅ ثبت تخصیص", "al:save")],
-          [btn("❌ لغو", "al:cancel")],
-        ],
-      },
+      inline_keyboard: [
+        [btn("✅ ثبت تخصیص", "al:save")],
+        [btn("❌ لغو", "al:cancel")],
+      ],
     },
   );
 }
@@ -1232,6 +1369,56 @@ async function handleCrud(env, msg, action, args) {
   }
   const schema = await getSchema(env, ENT[st.ent].key);
   const p = schema.props.find((x) => x.name === st.propName);
+
+  if (action === "unit" && p && isMoneyField(st.ent, p.name)) {
+    st.moneyUnitFactor = amountUnitFactor(args[0]);
+    if (!st.moneyUnitFactor) return;
+    st.step = "money-input";
+    await setState(env, chatId, st);
+    await editPanel(
+      env,
+      msg,
+      scaledAmountPrompt(st.moneyUnitFactor),
+      {
+        inline_keyboard: [
+          [
+            btn(
+              "❌ لغو",
+              st.flow === "new" ? "x:x" : `x:v:${st.ent}:${st.pageId}`,
+            ),
+          ],
+        ],
+      },
+    );
+    return sendScaledAmountPrompt(env, chatId, st.moneyUnitFactor);
+  }
+  if (action === "money-edit" && p && st.pendingMoney) {
+    st.step = "money-input";
+    await setState(env, chatId, st);
+    await editPanel(env, msg, scaledAmountPrompt(st.moneyUnitFactor), {
+      inline_keyboard: [
+        [
+          btn(
+            "❌ لغو",
+            st.flow === "new" ? "x:x" : `x:v:${st.ent}:${st.pageId}`,
+          ),
+        ],
+      ],
+    });
+    return sendScaledAmountPrompt(env, chatId, st.moneyUnitFactor);
+  }
+  if (action === "money-ok" && p && st.pendingMoney) {
+    const amount = st.pendingMoney.number;
+    delete st.pendingMoney;
+    return setFieldValue(
+      env,
+      chatId,
+      msg,
+      st,
+      { number: amount },
+      fmt(amount),
+    );
+  }
 
   if (action === "o" && p) {
     const name = st.opts?.[Number(args[0])];
@@ -1467,6 +1654,20 @@ async function askField(env, chatId, msg, st, p, mode) {
     btn("❌ لغو", mode === "new" ? "x:x" : `x:v:${st.ent}:${st.pageId}`),
   ];
 
+  if (isMoney) {
+    st.step = "money-unit";
+    await setState(env, chatId, st);
+    return showMoneyUnitChoice(
+      env,
+      chatId,
+      msg,
+      "x",
+      cancelRow[0].callback_data,
+      `💰 <b>${esc(displayName)}</b>\nواحد مبلغ را انتخاب کن:`,
+      [tail],
+    );
+  }
+
   if (p.type === "select" || p.type === "status" || p.type === "multi_select") {
     st.opts = p.options || [];
     st.step = "choice";
@@ -1551,6 +1752,16 @@ async function handleFieldText(env, chatId, st, text) {
       return advanceNew(env, chatId, null, st);
     }
     return setFieldValue(env, chatId, null, st, emptyPayload(p), "—");
+  }
+
+  if (st.step === "money-input" && isMoneyField(st.ent, p.name)) {
+    const amount = parseScaledAmount(text, st.moneyUnitFactor);
+    if (!(amount > 0))
+      return send(env, chatId, scaledAmountError(st.moneyUnitFactor));
+    st.pendingMoney = { number: amount };
+    st.step = "money-review";
+    await setState(env, chatId, st);
+    return sendAmountReview(env, chatId, amount, "x:money-ok", "x:money-edit");
   }
 
   const r = parseFieldInput(st.ent, p, text);
