@@ -1413,7 +1413,12 @@ async function showItem(env, chatId, msg, e, id, note = "") {
   );
 
   for (const p of schema.props) {
-    if (p.type === "title" || isHiddenField(e, p)) continue;
+    if (
+      p.type === "title" ||
+      isHiddenField(e, p) ||
+      isHiddenAccountDetailField(e, p)
+    )
+      continue;
     const money = isMoneyField(e, p.name);
     let text;
     if (money && (p.type === "formula" || p.type === "rollup")) {
@@ -2558,6 +2563,12 @@ function isHiddenField(e, p) {
 
 function isMoneyField(e, name) {
   return ENT[e].money.includes(name) || (e === "a" && name === "مانده اولیه");
+}
+
+function isHiddenAccountDetailField(e, p) {
+  if (e !== "a") return false;
+  const normalizedName = String(p.name).replace(/\s/g, "").toLowerCase();
+  return p.name === "مانده اولیه" || normalizedName === "appid";
 }
 
 function isAccountOpeningDateField(p) {
