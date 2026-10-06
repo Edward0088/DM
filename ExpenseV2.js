@@ -2684,7 +2684,7 @@ async function runReport(env, chatId, msg, st, mode, format = "csv") {
       }
       const label = ENT[e].date ? rangeLabel(st.range) : "همه";
       if (format === "pdf") {
-        const pdf = await renderReportPdf(env, r, ENT[e], label);
+        const pdf = await renderReportPdf(env, r, ENT[e], label, mode);
         const filename = r.filename.replace(/\.csv$/i, ".pdf");
         await sendDocument(
           env,
@@ -2972,6 +2972,57 @@ const htmlEsc = (s) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
+const PDF_DETAIL_COLUMNS = {
+  transactions: [
+    TX.title,
+    TX.type,
+    TX.amount,
+    TX.date,
+    TX.fromAccount,
+    TX.toAccount,
+    TX.category,
+    TX.box,
+    TX.asset,
+    TX.assetQty,
+    TX.unitPrice,
+    TX.desc,
+  ],
+  allocations: [
+    ALC.title,
+    ALC.amount,
+    ALC.date,
+    ALC.fromAccount,
+    ALC.toAccount,
+    ALC.fromBox,
+    ALC.toBox,
+    ALC.desc,
+  ],
+  accounts: [ACC.title, ACC.balance, ACC.type],
+  boxes: [BOX.title, BOX.balance],
+  categories: [CAT.title, CAT.level, CAT.parent],
+  assets: [AST.title, AST.type, AST.symbol, AST.unit, AST.qty, AST.price, AST.value],
+};
+
+function preparePdfReport(report, ent, mode) {
+  if (mode !== "detail") return report;
+  const allowed = new Set(PDF_DETAIL_COLUMNS[ent.key] || []);
+  const rows = parseCsvRows(report.csv);
+  const header = rows.shift() || [];
+  const kept = header
+    .map((name, index) => ({ name: name.trim(), index }))
+    .filter(({ name }) => allowed.has(name));
+  if (!kept.length) return report;
+  const outputRows = [
+    kept.map(({ name }) => name),
+    ...rows.map((row) => kept.map(({ index }) => row[index] ?? "")),
+  ];
+  return {
+    ...report,
+    csv: "\uFEFF" + outputRows.map(csvLine).join("\r\n"),
+    count: rows.length,
+  };
+}
+
 function reportHtml(report, ent, label, fonts = null) {
   const rows = parseCsvRows(report.csv);
   const head = rows.shift() || [];
@@ -3021,9 +3072,10 @@ async function shabnamFdFonts() {
   return shabnamFdFontsPromise;
 }
 
-async function renderReportPdf(env, report, ent, label) {
+async function renderReportPdf(env, report, ent, label, mode = "detail") {
   const fonts = await shabnamFdFonts().catch(() => null);
-  const html = reportHtml(report, ent, label, fonts);
+  const pdfReport = preparePdfReport(report, ent, mode);
+  const html = reportHtml(pdfReport, ent, label, fonts);
   const options = {
     html,
     pdfOptions: {
