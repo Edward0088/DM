@@ -3004,23 +3004,40 @@ const PDF_DETAIL_COLUMNS = {
 };
 
 function preparePdfReport(report, ent, mode) {
-  if (mode !== "detail") return report;
-  const allowed = new Set(PDF_DETAIL_COLUMNS[ent.key] || []);
   const rows = parseCsvRows(report.csv);
   const header = rows.shift() || [];
+  const allowed = new Set(PDF_DETAIL_COLUMNS[ent.key] || []);
   const kept = header
-    .map((name, index) => ({ name: name.trim(), index }))
-    .filter(({ name }) => allowed.has(name));
+    .map((name, index) => ({
+      name: name.trim(),
+      index,
+      canonicalName: name.trim().replace(/\s*\(تومان\)\s*$/, "").trim(),
+    }))
+    .filter(({ canonicalName }) => mode !== "detail" || allowed.has(canonicalName));
   if (!kept.length) return report;
   const outputRows = [
     kept.map(({ name }) => name),
-    ...rows.map((row) => kept.map(({ index }) => row[index] ?? "")),
+    ...rows.map((row) =>
+      kept.map(({ index, name }) => {
+        const value = row[index] ?? "";
+        return /\(تومان\)\s*$/.test(name) ? formatPdfToman(value) : value;
+      }),
+    ),
   ];
   return {
     ...report,
     csv: "\uFEFF" + outputRows.map(csvLine).join("\r\n"),
     count: rows.length,
   };
+}
+
+function formatPdfToman(value) {
+  const number = Number(toEnDigits(String(value)).replace(/[٬,]/g, "").trim());
+  if (!Number.isFinite(number)) return value;
+  const normalized = Number.isInteger(number)
+    ? String(number)
+    : String(Number(number.toFixed(1)));
+  return fa(grp(normalized));
 }
 
 function reportHtml(report, ent, label, fonts = null) {
