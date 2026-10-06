@@ -1545,6 +1545,23 @@ async function handleCrud(env, msg, action, args) {
     return editPanel(env, msg, "⏸ بخش اهداف مالی فعلاً غیرفعال است.", backHome());
   }
 
+  if (action === "ca") {
+    await clearState(env, chatId);
+    return showCategoryRoot(env, chatId, msg, args[0]);
+  }
+  if (action === "cs") {
+    await clearState(env, chatId);
+    return listCategoryChildren(env, chatId, msg, args[0], Number(args[1]) || 0);
+  }
+  if (action === "cp") {
+    await clearState(env, chatId);
+    const parentId = args[0] === "-" ? null : args[0];
+    const page = Number(args[1]) || 0;
+    return parentId
+      ? listCategoryChildren(env, chatId, msg, parentId, page)
+      : listCategoryRoots(env, chatId, msg, page);
+  }
+
   if (["l", "v", "e", "d", "D", "n", "x"].includes(action))
     await clearState(env, chatId);
 
@@ -1753,6 +1770,7 @@ async function handleCrud(env, msg, action, args) {
 }
 
 async function listEntity(env, chatId, msg, e, page = 0) {
+  if (e === "c") return listCategoryRoots(env, chatId, msg, page);
   const ent = ENT[e];
   const sorts = ent.date
     ? [
@@ -1803,6 +1821,91 @@ async function listEntity(env, chatId, msg, e, page = 0) {
       ? "برای مشاهده، ویرایش یا حذف روی یک مورد بزن 👇"
       : "موردی ثبت نشده.");
   return panel(env, chatId, msg, text, { inline_keyboard: kb });
+}
+
+async function listCategoryRoots(env, chatId, msg, page = 0) {
+  const all = await listCategories(env, true);
+  const explicitRoots = all.filter((x) => x.level === "کلی");
+  const roots = explicitRoots.length
+    ? explicitRoots
+    : all.filter((x) => !x.parentIds.length);
+  const pages = Math.max(1, Math.ceil(roots.length / PAGE_SIZE));
+  page = Math.min(Math.max(0, page), pages - 1);
+  const slice = roots.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const rows = slice.map((root) => {
+    const count = all.filter((x) => x.parentIds.some((id) => idEq(id, root.id))).length;
+    const status = root.active ? "" : " (غیرفعال)";
+    return [
+      btn(
+        `${root.icon} ${root.name}${status} · ${fa(count)} زیر‌دسته`,
+        `x:ca:${compactId(root.id)}`,
+      ),
+    ];
+  });
+  const nav = [];
+  if (page > 0) nav.push(btn("◀️ قبلی", `x:cp:-:${page - 1}`));
+  if (pages > 1) nav.push(btn(`${fa(page + 1)}/${fa(pages)}`, "m:noop"));
+  if (page < pages - 1) nav.push(btn("بعدی ▶️", `x:cp:-:${page + 1}`));
+  if (nav.length) rows.push(nav);
+  rows.push([btn("➕ دسته‌بندی جدید", "x:n:c")]);
+  rows.push([btn("🏠 منوی اصلی", "m:home")]);
+  return panel(
+    env,
+    chatId,
+    msg,
+    `🏷 <b>دسته‌بندی‌ها</b> — دسته‌های والد\nبرای دیدن زیر‌دسته‌ها یا مدیریت خود دسته، روی آن بزن.`,
+    { inline_keyboard: rows },
+  );
+}
+
+async function showCategoryRoot(env, chatId, msg, rootId) {
+  const all = await listCategories(env, true);
+  const root = all.find((x) => idEq(x.id, rootId));
+  if (!root) return listCategoryRoots(env, chatId, msg, 0);
+  const children = all.filter((x) => x.parentIds.some((id) => idEq(id, root.id)));
+  const rows = [
+    [btn(`📂 مشاهده ${fa(children.length)} زیر‌دسته`, `x:cs:${compactId(root.id)}:0`)],
+    [btn("✏️ ویرایش همین دسته", `x:e:c:${compactId(root.id)}`)],
+    [btn("🗑 حذف همین دسته", `x:d:c:${compactId(root.id)}`)],
+    [btn("🔙 دسته‌های والد", "x:l:c:0")],
+  ];
+  return panel(
+    env,
+    chatId,
+    msg,
+    `${root.icon} <b>${esc(root.name)}</b>${root.active ? "" : "\nوضعیت: غیرفعال"}\n${fa(children.length)} زیر‌دسته ثبت شده است.`,
+    { inline_keyboard: rows },
+  );
+}
+
+async function listCategoryChildren(env, chatId, msg, rootId, page = 0) {
+  const all = await listCategories(env, true);
+  const root = all.find((x) => idEq(x.id, rootId));
+  if (!root) return listCategoryRoots(env, chatId, msg, 0);
+  const children = all.filter((x) => x.parentIds.some((id) => idEq(id, root.id)));
+  const pages = Math.max(1, Math.ceil(children.length / PAGE_SIZE));
+  page = Math.min(Math.max(0, page), pages - 1);
+  const slice = children.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const rows = slice.map((child) => [
+    btn(
+      `${child.icon} ${child.name}${child.active ? "" : " (غیرفعال)"}`,
+      `x:v:c:${compactId(child.id)}`,
+    ),
+  ]);
+  const nav = [];
+  if (page > 0) nav.push(btn("◀️ قبلی", `x:cp:${compactId(root.id)}:${page - 1}`));
+  if (pages > 1) nav.push(btn(`${fa(page + 1)}/${fa(pages)}`, "m:noop"));
+  if (page < pages - 1) nav.push(btn("بعدی ▶️", `x:cp:${compactId(root.id)}:${page + 1}`));
+  if (nav.length) rows.push(nav);
+  rows.push([btn("➕ دسته‌بندی جدید", "x:n:c")]);
+  rows.push([btn("🔙 بازگشت به والد", `x:ca:${compactId(root.id)}`)]);
+  return panel(
+    env,
+    chatId,
+    msg,
+    `${root.icon} <b>${esc(root.name)}</b>\nزیر‌دسته‌ها را برای ویرایش یا حذف انتخاب کن:`,
+    { inline_keyboard: rows },
+  );
 }
 
 async function briefOf(env, e, p) {
@@ -1901,10 +2004,16 @@ async function showItem(env, chatId, msg, e, id, note = "") {
   }
 
   const cid = compactId(id);
+  const categoryParentId =
+    e === "c" ? page.properties?.[CAT.parent]?.relation?.[0]?.id : null;
+  const backToList =
+    e === "c" && categoryParentId
+      ? `x:cs:${compactId(categoryParentId)}:0`
+      : `x:l:${e}:0`;
   const kb = {
     inline_keyboard: [
       [btn("✏️ ویرایش", `x:e:${e}:${cid}`), btn("🗑 حذف", `x:d:${e}:${cid}`)],
-      [btn("🔙 فهرست", `x:l:${e}:0`), btn("🏠 منو", "m:home")],
+      [btn("🔙 فهرست", backToList), btn("🏠 منو", "m:home")],
     ],
   };
   return panel(env, chatId, msg, lines.join("\n"), kb);
@@ -3227,15 +3336,16 @@ const listAssets = (env) =>
     (p) => propCheckbox(p, AST.active) !== false,
   );
 
-async function listCategories(env) {
+async function listCategories(env, includeInactive = false) {
   const rows = await queryDb(env, "categories");
   return rows
-    .filter((p) => propCheckbox(p, CAT.active) !== false)
+    .filter((p) => includeInactive || propCheckbox(p, CAT.active) !== false)
     .map((p) => ({
       id: p.id,
       name: propTitle(p, CAT.title),
       icon: pageEmoji(p),
       level: propChoice(p, CAT.level),
+      active: propCheckbox(p, CAT.active) !== false,
       parentIds: (p.properties?.[CAT.parent]?.relation || []).map((r) => r.id),
     }))
     .filter((x) => x.name);
