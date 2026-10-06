@@ -97,6 +97,8 @@ const ALC = {
   date: "تاریخ",
   fromBox: "از باکس",
   toBox: "به باکس",
+  fromAccount: "از حساب",
+  toAccount: "به حساب",
   goal: "هدف مالی",
   status: "وضعیت",
   desc: "توضیحات",
@@ -173,6 +175,8 @@ const ENT = {
       month: { label: "🗓 ماهانه" },
       fromBox: { label: "📦 از باکس", rel: ALC.fromBox },
       toBox: { label: "📦 به باکس", rel: ALC.toBox },
+      fromAccount: { label: "🏦 از حساب", rel: ALC.fromAccount },
+      toAccount: { label: "🏦 به حساب", rel: ALC.toAccount },
     },
   },
   a: {
@@ -1209,16 +1213,26 @@ async function saveTransaction(env, d) {
 /* ============================== Allocation flow ============================== */
 
 async function startAllocation(env, msg) {
+  try {
+    await ensureAllocationAccountSchema(env);
+  } catch (e) {
+    return editPanel(
+      env,
+      msg,
+      `❌ مدل تخصیص حساب ↔ باکس آماده نشد: ${esc(e.message)}\nدسترسی اتصال Notion به پایگاه‌داده حساب‌ها و تخصیص‌ها را بررسی کن.`,
+      backHome(),
+    );
+  }
   const state = {
     flow: "allocation",
     step: "mode",
     draft: { date: todayTehran(), status: "ثبت‌شده" },
   };
   await setState(env, msg.chat.id, state);
-  return editPanel(env, msg, "🎯 <b>تخصیص منابع</b>\nچه کاری می‌خواهی انجام بدهی؟", {
+  return editPanel(env, msg, "🎯 <b>انتقال بین حساب و باکس</b>\nجهت انتقال را انتخاب کن:", {
     inline_keyboard: [
-      [btn("➕ تخصیص از حساب اصلی به باکس", "al:assign")],
-      [btn("↩️ آزادسازی از باکس به حساب اصلی", "al:release")],
+      [btn("🏦 حساب به باکس", "al:assign")],
+      [btn("📦 باکس به حساب", "al:release")],
       [btn("🏠 منوی اصلی", "m:home")],
     ],
   });
@@ -1242,45 +1256,16 @@ async function handleAllocationCallback(env, msg, action, args) {
     return editPanel(env, msg, "این عملیات منقضی شده.", backHome());
   }
 
-  if (
-    state.step === "confirm" &&
-    !["assign", "assign-released", "release"].includes(state.draft.operation)
-  ) {
-    return editPanel(
-      env,
-      msg,
-      "این تخصیص از جریان قبلی است. عملیات را از ابتدا شروع کن.",
-      backHome(),
-    );
-  }
-
   if (action === "assign" && state.step === "mode") {
-    const mainBox = await getUnallocatedBox(env);
-    if (!mainBox)
-      return editPanel(
-        env,
-        msg,
-        "❌ باکس «تعیین‌تکلیف‌نشده» برای حساب اصلی پیدا نشد.",
-        backHome(),
-      );
     state.draft.operation = "assign";
-    state.draft.fromBox = mainBox;
-    state.maxAmount = await getBoxBalance(env, mainBox.id);
-    if (!(state.maxAmount > 0))
-      return editPanel(
-        env,
-        msg,
-        "💰 موجودی قابل تخصیص در حساب اصلی وجود ندارد.",
-        backHome(),
-      );
-    state.step = "to";
+    state.step = "from-account";
     await setState(env, chatId, state);
-    return allocationChooseBox(env, msg, "to", mainBox.id, state.maxAmount);
+    return allocationChooseAccount(env, msg, "from-account");
   }
 
   if (action === "release" && state.step === "mode") {
     state.draft.operation = "release";
-    state.step = "from";
+    state.step = "from-box";
     await setState(env, chatId, state);
     return allocationChooseBox(env, msg, "from");
   }
@@ -1306,10 +1291,10 @@ async function handleAllocationCallback(env, msg, action, args) {
       return editPanel(
         env,
         msg,
-        `↩️ <b>آزادسازی از ${esc(state.draft.fromBox.name)}</b>\nموجودی فعلی: <b>${fmt(state.maxAmount)} تومان</b>\n\nمقدار آزادسازی را انتخاب کن:`,
+        `↩️ <b>انتقال از ${esc(state.draft.fromBox.name)} به ${esc(state.draft.toAccount.name)}</b>\nموجودی فعلی: <b>${fmt(state.maxAmount)} تومان</b>\n\nمقدار انتقال را انتخاب کن:`,
         {
           inline_keyboard: [
-            [btn("آزادسازی کل موجودی", "al:full")],
+            [btn("انتقال کل موجودی", "al:full")],
             [btn("تعیین مبلغ", "al:amount")],
             [btn("تعیین درصد", "al:percent")],
             [btn("❌ لغو", "al:cancel")],
@@ -1336,26 +1321,40 @@ async function handleAllocationCallback(env, msg, action, args) {
     return sendAllocationConfirm(env, chatId, state, msg);
   }
 
-  if (action === "from" && state.step === "from" && state.draft.operation === "release") {
+  if (action === "from" && state.step === "from-box" && state.draft.operation === "release") {
     const source = (await listBoxes(env)).find((x) => idEq(x.id, args[0]));
-    const mainBox = await getUnallocatedBox(env);
-    if (!mainBox)
-      return editPanel(env, msg, "❌ باکس حساب اصلی پیدا نشد.", backHome());
-    if (!source || (mainBox && idEq(source.id, mainBox.id))) return;
+    if (!source) return;
     state.draft.fromBox = source;
-    state.draft.toBox = mainBox;
     state.maxAmount = await getBoxBalance(env, source.id);
     if (!(state.maxAmount > 0))
-      return editPanel(env, msg, `📦 «${esc(source.name)}» موجودی قابل آزادسازی ندارد.`, backHome());
+      return editPanel(env, msg, `📦 «${esc(source.name)}» موجودی قابل انتقال ندارد.`, backHome());
+    state.step = "to-account";
+    await setState(env, chatId, state);
+    return allocationChooseAccount(env, msg, "to-account");
+  }
+
+  if (action === "account" && ["from-account", "to-account"].includes(state.step)) {
+    const account = (await listAccounts(env)).find((x) => idEq(x.id, args[0]));
+    if (!account) return;
+    if (state.step === "from-account") {
+      state.draft.fromAccount = account;
+      state.maxAmount = await getAccountBalance(env, account.id);
+      if (!(state.maxAmount > 0))
+        return editPanel(env, msg, `🏦 «${esc(account.name)}» موجودی قابل انتقال ندارد.`, backHome());
+      state.step = "to-box";
+      await setState(env, chatId, state);
+      return allocationChooseBox(env, msg, "to", null, state.maxAmount);
+    }
+    state.draft.toAccount = account;
     state.step = "release-options";
     await setState(env, chatId, state);
     return editPanel(
       env,
       msg,
-      `↩️ <b>آزادسازی از ${esc(source.name)}</b>\nموجودی فعلی: <b>${fmt(state.maxAmount)} تومان</b>\n\nمقدار آزادسازی را انتخاب کن:`,
+      `↩️ <b>انتقال از ${esc(state.draft.fromBox.name)} به ${esc(account.name)}</b>\nموجودی قابل انتقال: <b>${fmt(state.maxAmount)} تومان</b>\n\nمقدار را انتخاب کن:`,
       {
         inline_keyboard: [
-          [btn("آزادسازی کل موجودی", "al:full")],
+          [btn("انتقال کل موجودی", "al:full")],
           [btn("تعیین مبلغ", "al:amount")],
           [btn("تعیین درصد", "al:percent")],
           [btn("❌ لغو", "al:cancel")],
@@ -1364,29 +1363,13 @@ async function handleAllocationCallback(env, msg, action, args) {
     );
   }
 
-  if (action === "to" && state.step === "to") {
-    if (!["assign", "assign-released"].includes(state.draft.operation))
-      return editPanel(
-        env,
-        msg,
-        "برای جابه‌جایی بین باکس‌ها، ابتدا مبلغ را به حساب اصلی آزاد کن.",
-        backHome(),
-      );
-    const mainBox = await getUnallocatedBox(env);
+  if (action === "to" && state.step === "to-box" && state.draft.operation === "assign") {
     const target = (await listBoxes(env)).find(
       (x) =>
-        idEq(x.id, args[0]) &&
-        (!mainBox || !idEq(x.id, mainBox.id)) &&
-        !idEq(x.id, state.draft.fromBox?.id),
+        idEq(x.id, args[0]),
     );
     if (!target) return;
     state.draft.toBox = target;
-    if (state.draft.operation === "assign-released") {
-      state.step = "confirm";
-      await setState(env, chatId, state);
-      return sendAllocationConfirm(env, chatId, state, msg);
-    }
-    state.draft.operation = "assign";
     state.step = "amount-unit";
     await setState(env, chatId, state);
     return showMoneyUnitChoice(env, chatId, msg, "al", "al:cancel");
@@ -1417,7 +1400,7 @@ async function handleAllocationCallback(env, msg, action, args) {
     await editPanel(
       env,
       msg,
-      "درصدی از موجودی باکس را برای آزادسازی وارد کن.\nمثلاً <code>۲۵</code> یعنی ۲۵٪:",
+      "درصدی از موجودی مبدأ را برای انتقال وارد کن.\nمثلاً <code>۲۵</code> یعنی ۲۵٪:",
       { inline_keyboard: [[btn("❌ لغو", "al:cancel")]] },
     );
     return send(env, chatId, "درصد را وارد کن 👇", {
@@ -1425,57 +1408,26 @@ async function handleAllocationCallback(env, msg, action, args) {
     });
   }
 
-  if (action === "released" && state.step === "released") {
-    const mainBox = await getUnallocatedBox(env);
-    if (!mainBox)
-      return editPanel(env, msg, "❌ باکس حساب اصلی پیدا نشد.", backHome());
-    const available = await getBoxBalance(env, mainBox.id);
-    if (available < state.draft.amount)
-      return editPanel(
-        env,
-        msg,
-        "موجودی حساب اصلی هنوز به‌روز نشده یا برای تخصیص کافی نیست. کمی بعد دوباره تلاش کن.",
-        backHome(),
-      );
-    state.maxAmount = available;
-    state.draft.operation = "assign-released";
-    state.draft.fromBox = mainBox;
-    state.step = "to";
-    await setState(env, chatId, state);
-    return allocationChooseBox(env, msg, "to", mainBox.id, state.maxAmount);
-  }
-
   if (action === "save") {
-    if (state.step !== "confirm" || !state.draft.fromBox || !state.draft.toBox)
+    const d = state.draft;
+    const complete = d.operation === "assign"
+      ? d.fromAccount && d.toBox
+      : d.fromBox && d.toAccount;
+    if (state.step !== "confirm" || !complete)
       return editPanel(env, msg, "جزئیات تخصیص کامل نیست. عملیات را دوباره شروع کن.", backHome());
-    const available = await getBoxBalance(env, state.draft.fromBox.id);
+    const available = d.operation === "assign"
+      ? await getAccountBalance(env, d.fromAccount.id)
+      : await getBoxBalance(env, d.fromBox.id);
     if (available < state.draft.amount)
       return editPanel(
         env,
         msg,
-        `موجودی باکس مبدأ کافی نیست. موجودی فعلی: <b>${fmt(available)} تومان</b>`,
+        `موجودی مبدأ کافی نیست. موجودی فعلی: <b>${fmt(available)} تومان</b>`,
         backHome(),
       );
     await saveAllocation(env, state.draft);
-    if (state.draft.operation === "release") {
-      state.step = "released";
-      state.draft.operation = "assign-released";
-      state.draft.fromBox = await getUnallocatedBox(env);
-      await setState(env, chatId, state);
-      return editPanel(
-        env,
-        msg,
-        `✅ ${fmt(state.draft.amount)} تومان به حساب اصلی آزاد شد.`,
-        {
-          inline_keyboard: [
-            [btn("🎯 تخصیص این مبلغ به باکس دیگر", "al:released")],
-            [btn("🏠 منوی اصلی", "m:home")],
-          ],
-        },
-      );
-    }
     await clearState(env, chatId);
-    return editPanel(env, msg, "✅ تخصیص منابع ثبت شد.", {
+    return editPanel(env, msg, "✅ انتقال بین حساب و باکس ثبت شد.", {
       inline_keyboard: [
         [btn("🎯 تخصیص جدید", "x:n:l")],
         [btn("📋 فهرست تخصیص‌ها", "m:allocations"), btn("🏠 منو", "m:home")],
@@ -1485,10 +1437,8 @@ async function handleAllocationCallback(env, msg, action, args) {
 }
 
 async function allocationChooseBox(env, msg, role, exclude, available = null) {
-  const mainBox = await getUnallocatedBox(env);
   const rows = (await listBoxes(env))
     .filter((x) => !exclude || !idEq(x.id, exclude))
-    .filter((x) => !mainBox || !idEq(x.id, mainBox.id))
     .map((x) => btn(`📦 ${x.name}`, `al:${role}:${compactId(x.id)}`));
   if (!rows.length)
     return editPanel(env, msg, "📦 برای این عملیات باکس دیگری در دسترس نیست.", backHome());
@@ -1496,8 +1446,8 @@ async function allocationChooseBox(env, msg, role, exclude, available = null) {
     env,
     msg,
     role === "from"
-      ? "↩️ کدام باکس را می‌خواهی به حساب اصلی آزاد کنی؟"
-      : `🎯 مبلغ را به کدام باکس اختصاص بدهم؟${available === null ? "" : `\nموجودی حساب اصلی: <b>${fmt(available)} تومان</b>`}`,
+      ? "↩️ کدام باکس مبدأ انتقال به حساب است؟"
+      : `🎯 مبلغ را به کدام باکس منتقل کنم؟${available === null ? "" : `\nموجودی حساب مبدأ: <b>${fmt(available)} تومان</b>`}`,
     {
       inline_keyboard: [
         ...chunk(rows.slice(0, 80), 2),
@@ -1507,21 +1457,34 @@ async function allocationChooseBox(env, msg, role, exclude, available = null) {
   );
 }
 
+async function allocationChooseAccount(env, msg, role) {
+  const rows = (await listAccounts(env)).map((x) =>
+    btn(`🏦 ${x.name}`, `al:account:${compactId(x.id)}`),
+  );
+  if (!rows.length)
+    return editPanel(env, msg, "🏦 حساب فعالی برای انتقال پیدا نشد.", backHome());
+  return editPanel(
+    env,
+    msg,
+    role === "from-account"
+      ? "🏦 حساب مبدأ را انتخاب کن:"
+      : "🏦 حساب مقصد را انتخاب کن:",
+    { inline_keyboard: [...chunk(rows.slice(0, 80), 2), [btn("❌ لغو", "al:cancel")]] },
+  );
+}
+
 function sendAllocationConfirm(env, chatId, state, msg = null) {
   const d = state.draft;
-  const fromLabel =
-    d.operation === "assign" || d.operation === "assign-released"
-      ? "حساب اصلی"
-      : d.fromBox.name;
-  const toLabel = d.operation === "release" ? "حساب اصلی" : d.toBox.name;
+  const fromLabel = d.operation === "assign" ? d.fromAccount.name : d.fromBox.name;
+  const toLabel = d.operation === "assign" ? d.toBox.name : d.toAccount.name;
   return panel(
     env,
     chatId,
     msg,
-    `🎯 <b>تأیید تخصیص</b>\n\nاز: ${esc(fromLabel)}\nبه: ${esc(toLabel)}\nمبلغ: <b>${fmt(d.amount)} تومان</b>`,
+    `🔄 <b>تأیید انتقال</b>\n\nاز: ${esc(fromLabel)}\nبه: ${esc(toLabel)}\nمبلغ: <b>${fmt(d.amount)} تومان</b>`,
     {
       inline_keyboard: [
-        [btn("✅ ثبت تخصیص", "al:save")],
+        [btn("✅ ثبت انتقال", "al:save")],
         [btn("❌ لغو", "al:cancel")],
       ],
     },
@@ -1529,19 +1492,47 @@ function sendAllocationConfirm(env, chatId, state, msg = null) {
 }
 
 async function saveAllocation(env, d) {
+  const fromName = d.operation === "assign" ? d.fromAccount.name : d.fromBox.name;
+  const toName = d.operation === "assign" ? d.toBox.name : d.toAccount.name;
   const props = {
-    [ALC.title]: titleProp(`${d.fromBox.name} ← ${d.toBox.name}`),
+    [ALC.title]: titleProp(`${fromName} → ${toName}`),
     [ALC.amount]: { number: d.amount },
     [ALC.date]: { date: { start: d.date } },
-    [ALC.fromBox]: relationProp(d.fromBox.id),
-    [ALC.toBox]: relationProp(d.toBox.id),
     [ALC.status]: selectProp("ثبت‌شده"),
   };
-  const res = await notion(env, "POST", "/pages", {
+  if (d.operation === "assign") {
+    props[ALC.fromAccount] = relationProp(d.fromAccount.id);
+    props[ALC.toBox] = relationProp(d.toBox.id);
+  } else {
+    props[ALC.fromBox] = relationProp(d.fromBox.id);
+    props[ALC.toAccount] = relationProp(d.toAccount.id);
+  }
+  const allocation = await notion(env, "POST", "/pages", {
     parent: { database_id: dbId(env, "allocations") },
     properties: props,
   });
-  return res.id;
+  try {
+    const txProps = {
+      [TX.title]: titleProp(`${fromName} به ${toName}`),
+      [TX.type]: selectProp("انتقال"),
+      [TX.amount]: { number: d.amount },
+      [TX.currency]: selectProp(DEFAULT_CURRENCY),
+      [TX.date]: { date: { start: d.date } },
+      [TX.status]: selectProp("ثبت‌شده"),
+    };
+    if (d.operation === "assign") txProps[TX.fromAccount] = relationProp(d.fromAccount.id);
+    else txProps[TX.toAccount] = relationProp(d.toAccount.id);
+    await notion(env, "POST", "/pages", {
+      parent: { database_id: dbId(env, "transactions") },
+      properties: txProps,
+    });
+  } catch (e) {
+    try {
+      await notion(env, "PATCH", `/pages/${allocation.id}`, { archived: true });
+    } catch {}
+    throw e;
+  }
+  return allocation.id;
 }
 
 /* ============================== CRUD (schema-driven) ============================== */
@@ -3183,6 +3174,44 @@ const listAccounts = (env) =>
     ACC.title,
     (p) => propCheckbox(p, ACC.active) !== false,
   );
+
+async function getAccountBalance(env, id) {
+  const accounts = await queryDb(env, "accounts");
+  const page = accounts.find((x) => idEq(x.id, id));
+  return page ? exactNumber(env, page, ACC.balance) : 0;
+}
+
+const allocationSchemaReady = new Map();
+async function ensureAllocationAccountSchema(env) {
+  const allocationDbId = dbId(env, "allocations");
+  const accountDbId = dbId(env, "accounts");
+  const cachedUntil = allocationSchemaReady.get(allocationDbId);
+  if (cachedUntil && cachedUntil > Date.now()) return;
+
+  const database = await notion(env, "GET", `/databases/${allocationDbId}`);
+  const missing = {};
+  for (const name of [ALC.fromAccount, ALC.toAccount]) {
+    const property = database.properties?.[name];
+    if (!property) {
+      missing[name] = {
+        relation: { database_id: accountDbId, single_property: {} },
+      };
+    } else if (
+      property.type !== "relation" ||
+      !idEq(property.relation?.database_id, accountDbId)
+    ) {
+      throw new Error(`ستون «${name}» باید رابطه‌ای به پایگاه‌داده حساب‌ها باشد`);
+    }
+  }
+  if (Object.keys(missing).length) {
+    await notion(env, "PATCH", `/databases/${allocationDbId}`, {
+      properties: missing,
+    });
+    schemaCache.delete(allocationDbId);
+  }
+  allocationSchemaReady.set(allocationDbId, Date.now() + 10 * 60 * 1000);
+}
+
 const listBoxes = (env) =>
   namedRows(
     env,
