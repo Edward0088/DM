@@ -495,7 +495,7 @@ async function handleMenu(env, msg, action) {
     accounts: "a",
     boxes: "b",
     assets: "s",
-    allocations: "l",
+    allocationhistory: "l",
     categories: "c",
   };
   if (listMap[action]) return listEntity(env, chatId, msg, listMap[action], 0);
@@ -506,6 +506,21 @@ async function handleMenu(env, msg, action) {
       msg,
       "💳 <b>تراکنش‌ها</b>\nیکی از گزینه‌ها را انتخاب کن:",
       transactionsKeyboard(),
+    );
+  if (action === "allocations")
+    return editPanel(
+      env,
+      msg,
+      "🎯 <b>تخصیص منابع</b>\nیکی از گزینه‌ها را انتخاب کن:",
+      {
+        inline_keyboard: [
+          [
+            btn("➕ تخصیص جدید", "x:n:l"),
+            btn("📋 سوابق تخصیص‌ها", "m:allocationhistory"),
+          ],
+          [btn("🏠 منوی اصلی", "m:home")],
+        ],
+      },
     );
   if (action === "goals")
     return editPanel(env, msg, "⏸ بخش اهداف مالی فعلاً غیرفعال است.", backHome());
@@ -1427,7 +1442,7 @@ async function handleAllocationCallback(env, msg, action, args) {
     return editPanel(env, msg, "✅ انتقال بین حساب و باکس ثبت شد.", {
       inline_keyboard: [
         [btn("🎯 تخصیص جدید", "x:n:l")],
-        [btn("📋 فهرست تخصیص‌ها", "m:allocations"), btn("🏠 منو", "m:home")],
+        [btn("📋 سوابق تخصیص‌ها", "m:allocationhistory"), btn("🏠 منو", "m:home")],
       ],
     });
   }
