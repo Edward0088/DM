@@ -574,11 +574,16 @@ function helpText() {
 function mainMenuKeyboard() {
   return {
     inline_keyboard: [
-      [btn("🏦 حساب‌ها", "m:accounts"), btn("📦 باکس‌ها", "m:boxes")],
-      [btn("💳 تراکنش", "m:transactions"), btn("🎯 تخصیص منابع", "m:allocations")],
-      [btn("💎 دارایی‌ها", "m:assets"), btn("🏷 دسته‌بندی‌ها", "m:categories")],
-      [btn("📊 داشبورد مالی", "m:report"), btn("📤 دریافت گزارش", "m:csv")],
-      [btn("⚙️ وضعیت سرویس‌ها", "m:check"), btn("📖 راهنما", "m:help")],
+      [btn("🏦 حساب‌ها", "m:accounts")],
+      [btn("📦 باکس‌ها", "m:boxes")],
+      [btn("💳 تراکنش", "m:transactions")],
+      [btn("🎯 تخصیص منابع", "m:allocations")],
+      [btn("💎 دارایی‌ها", "m:assets")],
+      [btn("🏷 دسته‌بندی‌ها", "m:categories")],
+      [btn("📊 داشبورد مالی", "m:report")],
+      [btn("📤 دریافت گزارش", "m:csv")],
+      [btn("⚙️ وضعیت سرویس‌ها", "m:check")],
+      [btn("📖 راهنما", "m:help")],
     ],
   };
 }
@@ -606,12 +611,11 @@ function backHome() {
 function txTypeKeyboard() {
   return {
     inline_keyboard: [
-      [btn("💸 هزینه", "tx:type:هزینه"), btn("💰 درآمد", "tx:type:درآمد")],
+      [btn("💸 هزینه", "tx:type:هزینه")],
+      [btn("💰 درآمد", "tx:type:درآمد")],
       [btn("🔁 انتقال", "tx:type:انتقال")],
-      [
-        btn("📈 خرید دارایی", "tx:type:خرید دارایی"),
-        btn("📉 فروش دارایی", "tx:type:فروش دارایی"),
-      ],
+      [btn("📈 خرید دارایی", "tx:type:خرید دارایی")],
+      [btn("📉 فروش دارایی", "tx:type:فروش دارایی")],
       [btn("🏠 بازگشت", "m:home")],
     ],
   };
@@ -1022,10 +1026,9 @@ async function choose(
   page = Math.min(Math.max(0, page), pages - 1);
   const slice = items.slice(page * PICK_SIZE, (page + 1) * PICK_SIZE);
 
-  const rows = chunk(
-    slice.map((x) => btn(`${cfg.icon} ${x.name}`, cfg.cb(compactId(x.id)))),
-    2,
-  );
+  const rows = slice.map((x) => [
+    btn(`${cfg.icon} ${x.name}`, cfg.cb(compactId(x.id))),
+  ]);
   if (pages > 1) {
     const nav = [];
     const mk = (p) =>
@@ -1055,15 +1058,12 @@ async function chooseCategoryRoot(
   const pages = Math.max(1, Math.ceil(roots.length / PICK_SIZE));
   page = Math.min(Math.max(0, page), pages - 1);
   const slice = roots.slice(page * PICK_SIZE, (page + 1) * PICK_SIZE);
-  const rows = chunk(
-    slice.map((x) =>
-      btn(
-        `${x.icon} ${x.name}`,
-        `tx:catroot:${compactId(x.id)}:${optional ? "1" : "0"}`,
-      ),
+  const rows = slice.map((x) => [
+    btn(
+      `${x.icon} ${x.name}`,
+      `tx:catroot:${compactId(x.id)}:${optional ? "1" : "0"}`,
     ),
-    2,
-  );
+  ]);
 
   if (pages > 1) {
     const nav = [];
@@ -1116,12 +1116,7 @@ async function chooseCategoryChild(
       ),
     ],
   ];
-  rows.push(
-    ...chunk(
-      slice.map((x) => btn(`${x.icon} ${x.name}`, `tx:cat:${compactId(x.id)}`)),
-      2,
-    ),
-  );
+  rows.push(...slice.map((x) => [btn(`${x.icon} ${x.name}`, `tx:cat:${compactId(x.id)}`)]));
   if (pages > 1) {
     const nav = [];
     if (page > 0)
@@ -1450,7 +1445,7 @@ async function allocationChooseBox(env, msg, role, exclude, available = null) {
       : `🎯 مبلغ را به کدام باکس منتقل کنم؟${available === null ? "" : `\nموجودی حساب مبدأ: <b>${fmt(available)} تومان</b>`}`,
     {
       inline_keyboard: [
-        ...chunk(rows.slice(0, 80), 2),
+        ...rows.slice(0, 80).map((row) => [row[0]]),
         [btn("❌ لغو", "al:cancel")],
       ],
     },
@@ -1469,7 +1464,12 @@ async function allocationChooseAccount(env, msg, role) {
     role === "from-account"
       ? "🏦 حساب مبدأ را انتخاب کن:"
       : "🏦 حساب مقصد را انتخاب کن:",
-    { inline_keyboard: [...chunk(rows.slice(0, 80), 2), [btn("❌ لغو", "al:cancel")]] },
+    {
+      inline_keyboard: [
+        ...rows.slice(0, 80).map((row) => [row[0]]),
+        [btn("❌ لغو", "al:cancel")],
+      ],
+    },
   );
 }
 
@@ -1833,11 +1833,10 @@ async function listCategoryRoots(env, chatId, msg, page = 0) {
   page = Math.min(Math.max(0, page), pages - 1);
   const slice = roots.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const rows = slice.map((root) => {
-    const count = all.filter((x) => x.parentIds.some((id) => idEq(id, root.id))).length;
     const status = root.active ? "" : " (غیرفعال)";
     return [
       btn(
-        `${root.icon} ${root.name}${status} · ${fa(count)} زیر‌دسته`,
+        `${root.icon} ${root.name}${status}`,
         `x:ca:${compactId(root.id)}`,
       ),
     ];
@@ -1862,9 +1861,8 @@ async function showCategoryRoot(env, chatId, msg, rootId) {
   const all = await listCategories(env, true);
   const root = all.find((x) => idEq(x.id, rootId));
   if (!root) return listCategoryRoots(env, chatId, msg, 0);
-  const children = all.filter((x) => x.parentIds.some((id) => idEq(id, root.id)));
   const rows = [
-    [btn(`📂 مشاهده ${fa(children.length)} زیر‌دسته`, `x:cs:${compactId(root.id)}:0`)],
+    [btn("📂 مشاهده زیر‌دسته‌ها", `x:cs:${compactId(root.id)}:0`)],
     [btn("✏️ ویرایش همین دسته", `x:e:c:${compactId(root.id)}`)],
     [btn("🗑 حذف همین دسته", `x:d:c:${compactId(root.id)}`)],
     [btn("🔙 دسته‌های والد", "x:l:c:0")],
@@ -1873,7 +1871,7 @@ async function showCategoryRoot(env, chatId, msg, rootId) {
     env,
     chatId,
     msg,
-    `${root.icon} <b>${esc(root.name)}</b>${root.active ? "" : "\nوضعیت: غیرفعال"}\n${fa(children.length)} زیر‌دسته ثبت شده است.`,
+    `${root.icon} <b>${esc(root.name)}</b>${root.active ? "" : "\nوضعیت: غیرفعال"}\nبرای مشاهده یا مدیریت زیر‌دسته‌ها، گزینه‌ی زیر را انتخاب کن.`,
     { inline_keyboard: rows },
   );
 }
