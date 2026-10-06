@@ -2384,12 +2384,13 @@ async function relNames(env, ids) {
 async function showOverview(env, msg) {
   const cm = currentJMonth();
   const prev = cm.m === 1 ? { y: cm.y - 1, m: 12 } : { y: cm.y, m: cm.m - 1 };
-  const [accounts, boxes, assets, thisMonth, lastMonth] = await Promise.all([
+  const [accounts, boxes, assets, thisMonth, lastMonth, categories] = await Promise.all([
     queryDb(env, "accounts"),
     queryDb(env, "boxes"),
     queryDb(env, "assets"),
     monthTransactions(env, cm.y, cm.m),
     monthTransactions(env, prev.y, prev.m),
+    listCategories(env, true),
   ]);
 
   const sum = async (pages, name, activeName) => {
@@ -2417,25 +2418,72 @@ async function showOverview(env, msg) {
   const a = stat(thisMonth),
     b = stat(lastMonth);
 
+  const categoryNames = new Map(
+    categories.map((category) => [compactId(category.id), `${category.icon} ${category.name}`]),
+  );
+  const expensesByCategory = new Map();
+  for (const tx of thisMonth) {
+    if (propChoice(tx, TX.type) !== "هزینه") continue;
+    const categoryId = tx.properties?.[TX.category]?.relation?.[0]?.id;
+    const label = categoryId
+      ? categoryNames.get(compactId(categoryId)) || "دسته‌ی حذف‌شده"
+      : "بدون دسته‌بندی";
+    expensesByCategory.set(
+      label,
+      (expensesByCategory.get(label) || 0) + propNumber(tx, TX.amount),
+    );
+  }
+  const expenseRows = [...expensesByCategory.entries()]
+    .map(([label, amount]) => ({ label, amount }))
+    .sort((x, y) => y.amount - x.amount);
+  const visibleExpenses = expenseRows.slice(0, 8);
+  if (expenseRows.length > visibleExpenses.length) {
+    visibleExpenses.push({
+      label: "سایر دسته‌ها",
+      amount: expenseRows
+        .slice(8)
+        .reduce((total, row) => total + row.amount, 0),
+    });
+  }
+  const expenseCategoryLines = visibleExpenses.length
+    ? visibleExpenses.map((row) => {
+        const share = a.expense
+          ? Math.round((row.amount / a.expense) * 100)
+          : 0;
+        return `▫️ ${esc(row.label)}: <b>${fmt(row.amount)} تومان</b> · ${fa(share)}٪`;
+      })
+    : ["در این ماه هزینه‌ای ثبت نشده است."];
+
   const text = [
-    "📊 <b>نمای کلی مالی</b>",
+    "📊 <b>داشبورد مالی</b>",
+    "━━━━━━━━━━━━━━",
+    "🏦 <b>وضعیت دارایی‌ها</b>",
     "",
-    `🏦 موجودی حساب‌ها: <b>${fmt(cash)} تومان</b>`,
-    `📦 مجموع مانده باکس‌ها: <b>${fmt(boxTotal)} تومان</b>`,
+    `💳 موجودی حساب‌ها: <b>${fmt(cash)} تومان</b>`,
+    `📦 موجودی باکس‌ها: <b>${fmt(boxTotal)} تومان</b>`,
     `💎 ارزش دارایی‌ها: <b>${fmt(assetValue)} تومان</b>`,
-    `🧮 مجموع (حساب‌ها + دارایی‌ها): <b>${fmt(cash + assetValue)} تومان</b>`,
+    `🧮 مجموع حساب‌ها و دارایی‌ها: <b>${fmt(cash + assetValue)} تومان</b>`,
     "",
-    `📅 <b>${MONTHS[cm.m - 1]} ${fa(cm.y)}</b>`,
-    `   💰 درآمد: ${fmt(a.income)} تومان`,
-    `   💸 هزینه: ${fmt(a.expense)} تومان`,
-    `   📈 خرید دارایی: ${fmt(a.invested)} تومان`,
-    `   ➕ خالص: ${fmt(a.income - a.expense - a.invested)} تومان`,
+    "━━━━━━━━━━━━━━",
+    `📅 <b>عملکرد ${MONTHS[cm.m - 1]} ${fa(cm.y)}</b>`,
+    `📥 درآمد: <b>${fmt(a.income)} تومان</b>`,
+    `📤 هزینه: <b>${fmt(a.expense)} تومان</b>`,
+    `📈 خرید دارایی: <b>${fmt(a.invested)} تومان</b>`,
+    `➕ خالص ماه: <b>${fmt(a.income - a.expense - a.invested)} تومان</b>`,
     "",
-    `📅 <b>${MONTHS[prev.m - 1]} ${fa(prev.y)}</b>`,
-    `   💰 درآمد: ${fmt(b.income)} | 💸 هزینه: ${fmt(b.expense)} | 📈 خرید: ${fmt(b.invested)} تومان`,
+    "━━━━━━━━━━━━━━",
+    "🏷 <b>هزینه‌های ماه بر اساس دسته‌بندی</b>",
+    ...expenseCategoryLines,
+    "",
+    `↩️ ماه قبل (${MONTHS[prev.m - 1]} ${fa(prev.y)}): درآمد ${fmt(b.income)} · هزینه ${fmt(b.expense)} · خرید دارایی ${fmt(b.invested)} تومان`,
   ].join("\n");
 
-  return editPanel(env, msg, text, backHome());
+  return editPanel(env, msg, text, {
+    inline_keyboard: [
+      [btn("📤 دریافت گزارش مالی", "m:csv")],
+      [btn("🏠 منوی اصلی", "m:home")],
+    ],
+  });
 }
 
 function monthTransactions(env, y, m) {
@@ -2455,17 +2503,20 @@ function monthTransactions(env, y, m) {
 /* ============================== CSV reports ============================== */
 
 function reportTableMenu(env, chatId, msg) {
-  const rows = chunk(
-    ENT_ORDER.map((e) => btn(`${ENT[e].icon} ${ENT[e].fa}`, `r:t:${e}`)),
-    2,
-  );
-  rows.push([btn("🗂 همه جدول‌ها", "r:t:all")]);
-  rows.push([btn("🏠 منوی اصلی", "m:home")]);
+  const rows = [
+    [btn("— 🧾 فعالیت‌های مالی —", "m:noop")],
+    [btn("💳 تراکنش‌ها", "r:t:t"), btn("🎯 تخصیص‌ها", "r:t:l")],
+    [btn("— 🏦 حساب‌ها و دارایی‌ها —", "m:noop")],
+    [btn("🏦 حساب‌ها", "r:t:a"), btn("📦 باکس‌ها", "r:t:b")],
+    [btn("💎 دارایی‌ها", "r:t:s"), btn("🏷 دسته‌بندی‌ها", "r:t:c")],
+    [btn("🗂 گزارش همه‌ی بخش‌ها", "r:t:all")],
+    [btn("🏠 منوی اصلی", "m:home")],
+  ];
   return panel(
     env,
     chatId,
     msg,
-    "📤 <b>گزارش مالی</b>\nکدام بخش را می‌خواهی؟\n\nمبلغ‌ها به تومان و تاریخ‌ها شمسی نمایش داده می‌شوند.",
+    "📤 <b>گزارش‌ساز مالی</b>\n\n<b>۱. موضوع گزارش را انتخاب کن</b>\nبعد بازه، نوع گزارش و قالب فایل را مشخص می‌کنی.\n\n💰 مبلغ‌ها به تومان و تاریخ‌ها شمسی هستند.",
     { inline_keyboard: rows },
   );
 }
@@ -2542,7 +2593,8 @@ function rangeMenu(env, chatId, msg, st) {
     st.ent === "all"
       ? "\n(بازه فقط روی جدول‌های تاریخ‌دار — تراکنش‌ها و تخصیص‌ها — اعمال می‌شود.)"
       : "";
-  return panel(env, chatId, msg, `📅 <b>بازه‌ی گزارش</b>${note}`, {
+  const title = st.ent === "all" ? "همه‌ی بخش‌ها" : ENT[st.ent].fa;
+  return panel(env, chatId, msg, `📅 <b>۲. بازه‌ی گزارش</b>\n${esc(title)}${note}\n\nبازه را انتخاب کن:`, {
     inline_keyboard: [
       [btn("📅 امروز", "r:g:today"), btn("🗓 این ماه", "r:g:thism")],
       [btn("🗓 ماه قبل", "r:g:lastm"), btn("📆 انتخاب ماه", "r:g:pick")],
@@ -2590,18 +2642,19 @@ async function afterRange(env, chatId, msg, st) {
     env,
     chatId,
     msg,
-    `📤 <b>${esc(ENT[st.ent].fa)}</b>\nبازه: ${rangeLabel(st.range)}\n\nنوع خروجی؟`,
+    `📤 <b>${esc(ENT[st.ent].fa)}</b>\n📅 بازه: ${rangeLabel(st.range)}\n\n<b>۳. نوع گزارش را انتخاب کن</b>`,
     { inline_keyboard: rows },
   );
 }
 
 function reportFormatMenu(env, chatId, msg, st) {
   const title = st.ent === "all" ? "همه‌ی بخش‌ها" : ENT[st.ent].fa;
+  const step = st.ent === "all" ? "۳" : ENT[st.ent].date ? "۴" : "۲";
   return panel(
     env,
     chatId,
     msg,
-    `📎 <b>فرمت خروجی</b>\n${esc(title)} — ${rangeLabel(st.range)}`,
+    `📎 <b>${step}. قالب فایل</b>\n${esc(title)}\n📅 ${rangeLabel(st.range)}\n\nفایل موردنظرت را انتخاب کن:`,
     {
       inline_keyboard: [
         [btn("📊 فایل CSV", "r:f:csv"), btn("📄 فایل PDF", "r:f:pdf")],
@@ -2919,24 +2972,58 @@ const htmlEsc = (s) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
-function reportHtml(report, ent, label) {
+function reportHtml(report, ent, label, fonts = null) {
   const rows = parseCsvRows(report.csv);
   const head = rows.shift() || [];
   const th = head.map((x) => `<th>${htmlEsc(x)}</th>`).join("");
   const body = rows
     .map((r) => `<tr>${r.map((x) => `<td>${htmlEsc(x)}</td>`).join("")}</tr>`)
     .join("");
+  const fontFaces = fonts
+    ? `@font-face{font-family:ShabnamFD;src:url('${fonts.regular}') format('woff2');font-style:normal;font-weight:400} @font-face{font-family:ShabnamFD;src:url('${fonts.bold}') format('woff2');font-style:normal;font-weight:700}`
+    : "";
   return `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><style>
-    @page{size:A4 landscape;margin:14mm}*{box-sizing:border-box}body{font-family:"Noto Sans Arabic",Tahoma,Arial,sans-serif;color:#172033;margin:0;direction:rtl}
-    .head{display:flex;justify-content:space-between;align-items:end;margin-bottom:14px}.title{font-size:22px;font-weight:800;color:#163b65}.meta{font-size:11px;color:#64748b}
-    table{width:100%;border-collapse:collapse;font-size:10px;direction:rtl}th{background:#163b65;color:#fff;font-weight:700}th,td{border:1px solid #d9e2ec;padding:7px;text-align:right;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere}tr:nth-child(even) td{background:#f4f7fb}
-    .foot{margin-top:10px;font-size:10px;color:#64748b}
-  </style></head><body><div class="head"><div class="title">${htmlEsc(ent.icon)} گزارش ${htmlEsc(ent.fa)}</div><div class="meta">${htmlEsc(label)}</div></div>
-  <table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table><div class="foot">${htmlEsc(fa(report.count))} ردیف · همه مبالغ به تومان</div></body></html>`;
+    ${fontFaces}
+    @page{size:A4 landscape;margin:14mm}*{box-sizing:border-box}body{font-family:ShabnamFD,Tahoma,Arial,sans-serif;color:#172033;margin:0;direction:rtl;font-size:11px}
+    .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;padding:0 0 12px;border-bottom:2px solid #dbe6f1}.title{font-size:22px;font-weight:700;color:#163b65}.meta{font-size:11px;color:#64748b;background:#f1f5f9;border-radius:8px;padding:6px 10px}
+    table{width:100%;border-collapse:collapse;font-size:10px;direction:rtl}thead{display:table-header-group}th{background:#163b65;color:#fff;font-weight:700}th,td{border:1px solid #d9e2ec;padding:7px;text-align:right;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere}tr:nth-child(even) td{background:#f4f7fb}tr{break-inside:avoid}
+    .foot{margin-top:12px;padding-top:8px;border-top:1px solid #d9e2ec;font-size:9px;color:#64748b;display:flex;justify-content:space-between}
+  </style></head><body><div class="head"><div class="title">${htmlEsc(ent.icon)} گزارش ${htmlEsc(ent.fa)}</div><div class="meta">بازه: ${htmlEsc(label)}</div></div>
+  <table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table><div class="foot"><span>${htmlEsc(fa(report.count))} ردیف · مبالغ به تومان</span><span>قلم Shabnam FD · Saber Rastikerdar · SIL OFL 1.1</span></div></body></html>`;
+}
+
+let shabnamFdFontsPromise;
+async function shabnamFdFonts() {
+  if (!shabnamFdFontsPromise) {
+    const toDataUrl = async (filename) => {
+      const response = await fetch(
+        `https://unpkg.com/shabnam-font@5.0.0/dist/Farsi-Digits/${filename}`,
+      );
+      if (!response.ok) throw new Error(`دریافت قلم ${filename} ناموفق بود`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      let binary = "";
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+      }
+      return `data:font/woff2;base64,${btoa(binary)}`;
+    };
+    shabnamFdFontsPromise = Promise.all([
+      toDataUrl("Shabnam-FD.woff2"),
+      toDataUrl("Shabnam-Bold-FD.woff2"),
+    ])
+      .then(([regular, bold]) => ({ regular, bold }))
+      .catch((error) => {
+        shabnamFdFontsPromise = null;
+        throw error;
+      });
+  }
+  return shabnamFdFontsPromise;
 }
 
 async function renderReportPdf(env, report, ent, label) {
-  const html = reportHtml(report, ent, label);
+  const fonts = await shabnamFdFonts().catch(() => null);
+  const html = reportHtml(report, ent, label, fonts);
   const options = {
     html,
     pdfOptions: {
