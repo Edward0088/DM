@@ -398,7 +398,26 @@ async function handleText(msg, env) {
     const amount = parseScaledAmount(text, state.moneyUnitFactor);
     if (!(amount > 0))
       return send(env, chatId, scaledAmountError(state.moneyUnitFactor));
+    if (amount > state.maxAmount)
+      return send(
+        env,
+        chatId,
+        `❌ مبلغ از موجودی قابل تخصیص بیشتر است. موجودی: <b>${fmt(state.maxAmount)} تومان</b>`,
+      );
     state.pendingAmount = amount;
+    state.step = "amount-review";
+    await setState(env, chatId, state);
+    return sendAmountReview(env, chatId, amount, "al:amount-ok", "al:amount-edit");
+  }
+  if (state.flow === "allocation" && state.step === "percent-input") {
+    const percent = parsePercentInput(text);
+    if (!(percent > 0 && percent <= 100))
+      return send(env, chatId, "❌ درصد را از ۱ تا ۱۰۰ وارد کن؛ مثلاً <code>۲۵</code>.");
+    const amount = Math.round((state.maxAmount * percent) / 100);
+    if (!(amount > 0))
+      return send(env, chatId, "❌ این درصد از موجودی مبلغ قابل تخصیصی ایجاد نمی‌کند.");
+    state.pendingAmount = amount;
+    state.selectedPercent = percent;
     state.step = "amount-review";
     await setState(env, chatId, state);
     return sendAmountReview(env, chatId, amount, "al:amount-ok", "al:amount-edit");
@@ -647,6 +666,15 @@ function parseScaledAmount(text, factor) {
   const value = Number(normalized);
   if (!(value > 0)) return NaN;
   return Math.round(value * factor * RIAL_PER_TOMAN);
+}
+
+function parsePercentInput(text) {
+  const normalized = toEnDigits(String(text).trim())
+    .replace(/[٪%]/g, "")
+    .replace(/,/g, "")
+    .trim();
+  if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) return NaN;
+  return Number(normalized);
 }
 
 function sendAmountReview(env, chatId, amount, confirmAction, editAction) {
@@ -1183,11 +1211,17 @@ async function saveTransaction(env, d) {
 async function startAllocation(env, msg) {
   const state = {
     flow: "allocation",
-    step: "from",
+    step: "mode",
     draft: { date: todayTehran(), status: "ثبت‌شده" },
   };
   await setState(env, msg.chat.id, state);
-  return allocationChooseBox(env, msg, "from");
+  return editPanel(env, msg, "🎯 <b>تخصیص منابع</b>\nچه کاری می‌خواهی انجام بدهی؟", {
+    inline_keyboard: [
+      [btn("➕ تخصیص از حساب اصلی به باکس", "al:assign")],
+      [btn("↩️ آزادسازی از باکس به حساب اصلی", "al:release")],
+      [btn("🏠 منوی اصلی", "m:home")],
+    ],
+  });
 }
 
 async function handleAllocationCallback(env, msg, action, args) {
@@ -1208,7 +1242,50 @@ async function handleAllocationCallback(env, msg, action, args) {
     return editPanel(env, msg, "این عملیات منقضی شده.", backHome());
   }
 
-  if (action === "unit") {
+  if (
+    state.step === "confirm" &&
+    !["assign", "assign-released", "release"].includes(state.draft.operation)
+  ) {
+    return editPanel(
+      env,
+      msg,
+      "این تخصیص از جریان قبلی است. عملیات را از ابتدا شروع کن.",
+      backHome(),
+    );
+  }
+
+  if (action === "assign" && state.step === "mode") {
+    const mainBox = await getUnallocatedBox(env);
+    if (!mainBox)
+      return editPanel(
+        env,
+        msg,
+        "❌ باکس «تعیین‌تکلیف‌نشده» برای حساب اصلی پیدا نشد.",
+        backHome(),
+      );
+    state.draft.operation = "assign";
+    state.draft.fromBox = mainBox;
+    state.maxAmount = await getBoxBalance(env, mainBox.id);
+    if (!(state.maxAmount > 0))
+      return editPanel(
+        env,
+        msg,
+        "💰 موجودی قابل تخصیص در حساب اصلی وجود ندارد.",
+        backHome(),
+      );
+    state.step = "to";
+    await setState(env, chatId, state);
+    return allocationChooseBox(env, msg, "to", mainBox.id, state.maxAmount);
+  }
+
+  if (action === "release" && state.step === "mode") {
+    state.draft.operation = "release";
+    state.step = "from";
+    await setState(env, chatId, state);
+    return allocationChooseBox(env, msg, "from");
+  }
+
+  if (action === "unit" && state.step === "amount-unit") {
     state.moneyUnitFactor = amountUnitFactor(args[0]);
     if (!state.moneyUnitFactor) return;
     state.step = "amount-input";
@@ -1222,7 +1299,24 @@ async function handleAllocationCallback(env, msg, action, args) {
     return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
   }
 
-  if (action === "amount-edit") {
+  if (action === "amount-edit" && state.step === "amount-review") {
+    if (![1_000, 1_000_000].includes(state.moneyUnitFactor)) {
+      state.step = "release-options";
+      await setState(env, chatId, state);
+      return editPanel(
+        env,
+        msg,
+        `↩️ <b>آزادسازی از ${esc(state.draft.fromBox.name)}</b>\nموجودی فعلی: <b>${fmt(state.maxAmount)} تومان</b>\n\nمقدار آزادسازی را انتخاب کن:`,
+        {
+          inline_keyboard: [
+            [btn("آزادسازی کل موجودی", "al:full")],
+            [btn("تعیین مبلغ", "al:amount")],
+            [btn("تعیین درصد", "al:percent")],
+            [btn("❌ لغو", "al:cancel")],
+          ],
+        },
+      );
+    }
     state.step = "amount-input";
     await setState(env, chatId, state);
     await editPanel(
@@ -1242,26 +1336,144 @@ async function handleAllocationCallback(env, msg, action, args) {
     return sendAllocationConfirm(env, chatId, state, msg);
   }
 
-  const boxes = await listBoxes(env);
-
-  if (action === "from") {
-    state.draft.fromBox = boxes.find((x) => idEq(x.id, args[0]));
-    if (!state.draft.fromBox) return;
-    state.step = "to";
+  if (action === "from" && state.step === "from" && state.draft.operation === "release") {
+    const source = (await listBoxes(env)).find((x) => idEq(x.id, args[0]));
+    const mainBox = await getUnallocatedBox(env);
+    if (!mainBox)
+      return editPanel(env, msg, "❌ باکس حساب اصلی پیدا نشد.", backHome());
+    if (!source || (mainBox && idEq(source.id, mainBox.id))) return;
+    state.draft.fromBox = source;
+    state.draft.toBox = mainBox;
+    state.maxAmount = await getBoxBalance(env, source.id);
+    if (!(state.maxAmount > 0))
+      return editPanel(env, msg, `📦 «${esc(source.name)}» موجودی قابل آزادسازی ندارد.`, backHome());
+    state.step = "release-options";
     await setState(env, chatId, state);
-    return allocationChooseBox(env, msg, "to", state.draft.fromBox.id);
+    return editPanel(
+      env,
+      msg,
+      `↩️ <b>آزادسازی از ${esc(source.name)}</b>\nموجودی فعلی: <b>${fmt(state.maxAmount)} تومان</b>\n\nمقدار آزادسازی را انتخاب کن:`,
+      {
+        inline_keyboard: [
+          [btn("آزادسازی کل موجودی", "al:full")],
+          [btn("تعیین مبلغ", "al:amount")],
+          [btn("تعیین درصد", "al:percent")],
+          [btn("❌ لغو", "al:cancel")],
+        ],
+      },
+    );
   }
 
-  if (action === "to") {
-    state.draft.toBox = boxes.find((x) => idEq(x.id, args[0]));
-    if (!state.draft.toBox) return;
+  if (action === "to" && state.step === "to") {
+    if (!["assign", "assign-released"].includes(state.draft.operation))
+      return editPanel(
+        env,
+        msg,
+        "برای جابه‌جایی بین باکس‌ها، ابتدا مبلغ را به حساب اصلی آزاد کن.",
+        backHome(),
+      );
+    const mainBox = await getUnallocatedBox(env);
+    const target = (await listBoxes(env)).find(
+      (x) =>
+        idEq(x.id, args[0]) &&
+        (!mainBox || !idEq(x.id, mainBox.id)) &&
+        !idEq(x.id, state.draft.fromBox?.id),
+    );
+    if (!target) return;
+    state.draft.toBox = target;
+    if (state.draft.operation === "assign-released") {
+      state.step = "confirm";
+      await setState(env, chatId, state);
+      return sendAllocationConfirm(env, chatId, state, msg);
+    }
+    state.draft.operation = "assign";
     state.step = "amount-unit";
     await setState(env, chatId, state);
     return showMoneyUnitChoice(env, chatId, msg, "al", "al:cancel");
   }
 
+  if (action === "full" && state.step === "release-options") {
+    state.pendingAmount = state.maxAmount;
+    state.step = "amount-review";
+    await setState(env, chatId, state);
+    return sendAmountReview(
+      env,
+      chatId,
+      state.pendingAmount,
+      "al:amount-ok",
+      "al:amount-edit",
+    );
+  }
+
+  if (action === "amount" && state.step === "release-options") {
+    state.step = "amount-unit";
+    await setState(env, chatId, state);
+    return showMoneyUnitChoice(env, chatId, msg, "al", "al:cancel");
+  }
+
+  if (action === "percent" && state.step === "release-options") {
+    state.step = "percent-input";
+    await setState(env, chatId, state);
+    await editPanel(
+      env,
+      msg,
+      "درصدی از موجودی باکس را برای آزادسازی وارد کن.\nمثلاً <code>۲۵</code> یعنی ۲۵٪:",
+      { inline_keyboard: [[btn("❌ لغو", "al:cancel")]] },
+    );
+    return send(env, chatId, "درصد را وارد کن 👇", {
+      reply_markup: { force_reply: true, input_field_placeholder: "مثلاً ۲۵" },
+    });
+  }
+
+  if (action === "released" && state.step === "released") {
+    const mainBox = await getUnallocatedBox(env);
+    if (!mainBox)
+      return editPanel(env, msg, "❌ باکس حساب اصلی پیدا نشد.", backHome());
+    const available = await getBoxBalance(env, mainBox.id);
+    if (available < state.draft.amount)
+      return editPanel(
+        env,
+        msg,
+        "موجودی حساب اصلی هنوز به‌روز نشده یا برای تخصیص کافی نیست. کمی بعد دوباره تلاش کن.",
+        backHome(),
+      );
+    state.maxAmount = available;
+    state.draft.operation = "assign-released";
+    state.draft.fromBox = mainBox;
+    state.step = "to";
+    await setState(env, chatId, state);
+    return allocationChooseBox(env, msg, "to", mainBox.id, state.maxAmount);
+  }
+
   if (action === "save") {
+    if (state.step !== "confirm" || !state.draft.fromBox || !state.draft.toBox)
+      return editPanel(env, msg, "جزئیات تخصیص کامل نیست. عملیات را دوباره شروع کن.", backHome());
+    const available = await getBoxBalance(env, state.draft.fromBox.id);
+    if (available < state.draft.amount)
+      return editPanel(
+        env,
+        msg,
+        `موجودی باکس مبدأ کافی نیست. موجودی فعلی: <b>${fmt(available)} تومان</b>`,
+        backHome(),
+      );
     await saveAllocation(env, state.draft);
+    if (state.draft.operation === "release") {
+      state.step = "released";
+      state.draft.operation = "assign-released";
+      state.draft.fromBox = await getUnallocatedBox(env);
+      await setState(env, chatId, state);
+      return editPanel(
+        env,
+        msg,
+        `✅ ${fmt(state.draft.amount)} تومان به حساب اصلی آزاد شد.`,
+        {
+          inline_keyboard: [
+            [btn("🎯 تخصیص این مبلغ به باکس دیگر", "al:released")],
+            [btn("🏠 منوی اصلی", "m:home")],
+          ],
+        },
+      );
+    }
     await clearState(env, chatId);
     return editPanel(env, msg, "✅ تخصیص منابع ثبت شد.", {
       inline_keyboard: [
@@ -1272,14 +1484,20 @@ async function handleAllocationCallback(env, msg, action, args) {
   }
 }
 
-async function allocationChooseBox(env, msg, role, exclude) {
+async function allocationChooseBox(env, msg, role, exclude, available = null) {
+  const mainBox = await getUnallocatedBox(env);
   const rows = (await listBoxes(env))
     .filter((x) => !exclude || !idEq(x.id, exclude))
+    .filter((x) => !mainBox || !idEq(x.id, mainBox.id))
     .map((x) => btn(`📦 ${x.name}`, `al:${role}:${compactId(x.id)}`));
+  if (!rows.length)
+    return editPanel(env, msg, "📦 برای این عملیات باکس دیگری در دسترس نیست.", backHome());
   return editPanel(
     env,
     msg,
-    role === "from" ? "🎯 از کدام باکس؟" : "🎯 به کدام باکس؟",
+    role === "from"
+      ? "↩️ کدام باکس را می‌خواهی به حساب اصلی آزاد کنی؟"
+      : `🎯 مبلغ را به کدام باکس اختصاص بدهم؟${available === null ? "" : `\nموجودی حساب اصلی: <b>${fmt(available)} تومان</b>`}`,
     {
       inline_keyboard: [
         ...chunk(rows.slice(0, 80), 2),
@@ -1291,11 +1509,16 @@ async function allocationChooseBox(env, msg, role, exclude) {
 
 function sendAllocationConfirm(env, chatId, state, msg = null) {
   const d = state.draft;
+  const fromLabel =
+    d.operation === "assign" || d.operation === "assign-released"
+      ? "حساب اصلی"
+      : d.fromBox.name;
+  const toLabel = d.operation === "release" ? "حساب اصلی" : d.toBox.name;
   return panel(
     env,
     chatId,
     msg,
-    `🎯 <b>تأیید تخصیص</b>\n\nاز: ${esc(d.fromBox.name)}\nبه: ${esc(d.toBox.name)}\nمبلغ: <b>${fmt(d.amount)} تومان</b>`,
+    `🎯 <b>تأیید تخصیص</b>\n\nاز: ${esc(fromLabel)}\nبه: ${esc(toLabel)}\nمبلغ: <b>${fmt(d.amount)} تومان</b>`,
     {
       inline_keyboard: [
         [btn("✅ ثبت تخصیص", "al:save")],
@@ -2997,6 +3220,12 @@ async function getUnallocatedBox(env) {
       propTitle(x, BOX.title) === "تعیین‌تکلیف‌نشده",
   );
   return p ? { id: p.id, name: propTitle(p, BOX.title) } : null;
+}
+
+async function getBoxBalance(env, id) {
+  const boxes = await queryDb(env, "boxes");
+  const page = boxes.find((x) => idEq(x.id, id));
+  return page ? exactNumber(env, page, BOX.balance) : 0;
 }
 
 async function checkConnections(env) {
