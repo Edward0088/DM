@@ -216,7 +216,7 @@ const ENT = {
     money: [GOL.target, GOL.allocated],
   },
 };
-const ENT_ORDER = ["t", "l", "a", "b", "c", "s", "g"];
+const ENT_ORDER = ["t", "l", "a", "b", "c", "s"];
 const EDITABLE = new Set([
   "title",
   "rich_text",
@@ -468,15 +468,24 @@ async function handleMenu(env, msg, action) {
   await clearState(env, chatId);
 
   const listMap = {
-    transactions: "t",
+    txhistory: "t",
     accounts: "a",
     boxes: "b",
     assets: "s",
     allocations: "l",
-    goals: "g",
     categories: "c",
   };
   if (listMap[action]) return listEntity(env, chatId, msg, listMap[action], 0);
+
+  if (action === "transactions")
+    return editPanel(
+      env,
+      msg,
+      "💳 <b>تراکنش‌ها</b>\nیکی از گزینه‌ها را انتخاب کن:",
+      transactionsKeyboard(),
+    );
+  if (action === "goals")
+    return editPanel(env, msg, "⏸ بخش اهداف مالی فعلاً غیرفعال است.", backHome());
 
   if (action === "home") {
     await cleanupMessages(env, chatId, msg.message_id);
@@ -542,12 +551,21 @@ function helpText() {
 function mainMenuKeyboard() {
   return {
     inline_keyboard: [
-      [btn("➕ تراکنش جدید", "m:new"), btn("📒 سوابق تراکنش‌ها", "m:transactions")],
       [btn("🏦 حساب‌ها", "m:accounts"), btn("📦 باکس‌ها", "m:boxes")],
-      [btn("💎 دارایی‌ها", "m:assets"), btn("🎯 تخصیص منابع", "m:allocations")],
-      [btn("🏁 اهداف مالی", "m:goals"), btn("🏷 دسته‌بندی‌ها", "m:categories")],
+      [btn("💳 تراکنش", "m:transactions"), btn("🎯 تخصیص منابع", "m:allocations")],
+      [btn("💎 دارایی‌ها", "m:assets"), btn("🏷 دسته‌بندی‌ها", "m:categories")],
       [btn("📊 داشبورد مالی", "m:report"), btn("📤 دریافت گزارش", "m:csv")],
       [btn("⚙️ وضعیت سرویس‌ها", "m:check"), btn("📖 راهنما", "m:help")],
+    ],
+  };
+}
+
+function transactionsKeyboard() {
+  return {
+    inline_keyboard: [
+      [btn("➕ تراکنش جدید", "m:new")],
+      [btn("📒 سوابق تراکنش‌ها", "m:txhistory")],
+      [btn("🏠 منوی اصلی", "m:home")],
     ],
   };
 }
@@ -861,7 +879,7 @@ async function handleTxCallback(env, msg, action, args) {
       {
         inline_keyboard: [
           [btn("➕ تراکنش جدید", "m:new")],
-          [btn("💳 تراکنش‌ها", "m:transactions"), btn("🏠 منو", "m:home")],
+          [btn("💳 تراکنش‌ها", "m:txhistory"), btn("🏠 منو", "m:home")],
         ],
       },
     );
@@ -1308,6 +1326,11 @@ async function saveAllocation(env, d) {
 async function handleCrud(env, msg, action, args) {
   const chatId = msg.chat.id;
 
+  if (["l", "v", "e", "f", "d", "D", "n"].includes(action) && args[0] === "g") {
+    await clearState(env, chatId);
+    return editPanel(env, msg, "⏸ بخش اهداف مالی فعلاً غیرفعال است.", backHome());
+  }
+
   if (["l", "v", "e", "d", "D", "n", "x"].includes(action))
     await clearState(env, chatId);
 
@@ -1451,6 +1474,10 @@ async function handleCrud(env, msg, action, args) {
       { number: amount },
       fmt(amount),
     );
+  }
+  if (st.ent === "g") {
+    await clearState(env, chatId);
+    return editPanel(env, msg, "⏸ بخش اهداف مالی فعلاً غیرفعال است.", backHome());
   }
 
   if (action === "o" && p) {
@@ -2110,6 +2137,8 @@ async function handleReportCallback(env, msg, action, args) {
 
   if (action === "t") {
     const e = args[0];
+    if (e === "g")
+      return editPanel(env, msg, "⏸ بخش اهداف مالی فعلاً غیرفعال است.", backHome());
     if (e !== "all" && !ENT[e]) return;
     const st = { flow: "report", ent: e, range: null, step: null };
     await setState(env, chatId, st);
