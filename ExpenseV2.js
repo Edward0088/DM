@@ -574,16 +574,11 @@ function helpText() {
 function mainMenuKeyboard() {
   return {
     inline_keyboard: [
-      [btn("🏦 حساب‌ها", "m:accounts")],
-      [btn("📦 باکس‌ها", "m:boxes")],
-      [btn("💳 تراکنش", "m:transactions")],
-      [btn("🎯 تخصیص منابع", "m:allocations")],
-      [btn("💎 دارایی‌ها", "m:assets")],
-      [btn("🏷 دسته‌بندی‌ها", "m:categories")],
-      [btn("📊 داشبورد مالی", "m:report")],
-      [btn("📤 دریافت گزارش", "m:csv")],
-      [btn("⚙️ وضعیت سرویس‌ها", "m:check")],
-      [btn("📖 راهنما", "m:help")],
+      [btn("🏦 حساب‌ها", "m:accounts"), btn("📦 باکس‌ها", "m:boxes")],
+      [btn("💳 تراکنش", "m:transactions"), btn("🎯 تخصیص منابع", "m:allocations")],
+      [btn("💎 دارایی‌ها", "m:assets"), btn("🏷 دسته‌بندی‌ها", "m:categories")],
+      [btn("📊 داشبورد مالی", "m:report"), btn("📤 دریافت گزارش", "m:csv")],
+      [btn("⚙️ وضعیت سرویس‌ها", "m:check"), btn("📖 راهنما", "m:help")],
     ],
   };
 }
@@ -611,11 +606,9 @@ function backHome() {
 function txTypeKeyboard() {
   return {
     inline_keyboard: [
-      [btn("💸 هزینه", "tx:type:هزینه")],
-      [btn("💰 درآمد", "tx:type:درآمد")],
+      [btn("💸 هزینه", "tx:type:هزینه"), btn("💰 درآمد", "tx:type:درآمد")],
       [btn("🔁 انتقال", "tx:type:انتقال")],
-      [btn("📈 خرید دارایی", "tx:type:خرید دارایی")],
-      [btn("📉 فروش دارایی", "tx:type:فروش دارایی")],
+      [btn("📈 خرید دارایی", "tx:type:خرید دارایی"), btn("📉 فروش دارایی", "tx:type:فروش دارایی")],
       [btn("🏠 بازگشت", "m:home")],
     ],
   };
@@ -1026,9 +1019,10 @@ async function choose(
   page = Math.min(Math.max(0, page), pages - 1);
   const slice = items.slice(page * PICK_SIZE, (page + 1) * PICK_SIZE);
 
-  const rows = slice.map((x) => [
-    btn(`${cfg.icon} ${x.name}`, cfg.cb(compactId(x.id))),
-  ]);
+  const rows = chunk(
+    slice.map((x) => btn(`${cfg.icon} ${x.name}`, cfg.cb(compactId(x.id)))),
+    2,
+  );
   if (pages > 1) {
     const nav = [];
     const mk = (p) =>
@@ -1058,12 +1052,15 @@ async function chooseCategoryRoot(
   const pages = Math.max(1, Math.ceil(roots.length / PICK_SIZE));
   page = Math.min(Math.max(0, page), pages - 1);
   const slice = roots.slice(page * PICK_SIZE, (page + 1) * PICK_SIZE);
-  const rows = slice.map((x) => [
-    btn(
-      `${x.icon} ${x.name}`,
-      `tx:catroot:${compactId(x.id)}:${optional ? "1" : "0"}`,
+  const rows = chunk(
+    slice.map((x) =>
+      btn(
+        `${x.icon} ${x.name}`,
+        `tx:catroot:${compactId(x.id)}:${optional ? "1" : "0"}`,
+      ),
     ),
-  ]);
+    2,
+  );
 
   if (pages > 1) {
     const nav = [];
@@ -1116,7 +1113,12 @@ async function chooseCategoryChild(
       ),
     ],
   ];
-  rows.push(...slice.map((x) => [btn(`${x.icon} ${x.name}`, `tx:cat:${compactId(x.id)}`)]));
+  rows.push(
+    ...chunk(
+      slice.map((x) => btn(`${x.icon} ${x.name}`, `tx:cat:${compactId(x.id)}`)),
+      2,
+    ),
+  );
   if (pages > 1) {
     const nav = [];
     if (page > 0)
@@ -1445,7 +1447,7 @@ async function allocationChooseBox(env, msg, role, exclude, available = null) {
       : `🎯 مبلغ را به کدام باکس منتقل کنم؟${available === null ? "" : `\nموجودی حساب مبدأ: <b>${fmt(available)} تومان</b>`}`,
     {
       inline_keyboard: [
-        ...rows.slice(0, 80).map((row) => [row[0]]),
+        ...chunk(rows.slice(0, 80), 2),
         [btn("❌ لغو", "al:cancel")],
       ],
     },
@@ -1466,7 +1468,7 @@ async function allocationChooseAccount(env, msg, role) {
       : "🏦 حساب مقصد را انتخاب کن:",
     {
       inline_keyboard: [
-        ...rows.slice(0, 80).map((row) => [row[0]]),
+        ...chunk(rows.slice(0, 80), 2),
         [btn("❌ لغو", "al:cancel")],
       ],
     },
