@@ -641,6 +641,10 @@ function scaledAmountPrompt(factor) {
   return "💰 مبلغ را به <b>هزار تومان</b> وارد کن.\n\nمثلاً برای ۵۰۰ هزار تومان، عدد <code>۵۰۰</code> را وارد کن.";
 }
 
+function amountReplyNotice() {
+  return "✍️ لطفاً مبلغ را در پیام پاسخ‌گویی که برایت باز می‌شود وارد کن.";
+}
+
 function scaledAmountError(factor) {
   return `❌ فقط عدد را وارد کن؛ مثلاً <code>${factor === 1_000_000 ? "۳۲" : "۵۰۰"}</code>.`;
 }
@@ -778,7 +782,7 @@ async function handleTxCallback(env, msg, action, args) {
     await editPanel(
       env,
       msg,
-      scaledAmountPrompt(state.moneyUnitFactor),
+      amountReplyNotice(),
       { inline_keyboard: [[btn("❌ لغو", "tx:cancel")]] },
     );
     return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
@@ -790,7 +794,7 @@ async function handleTxCallback(env, msg, action, args) {
     await editPanel(
       env,
       msg,
-      scaledAmountPrompt(state.moneyUnitFactor),
+      amountReplyNotice(),
       { inline_keyboard: [[btn("❌ لغو", "tx:cancel")]] },
     );
     return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
@@ -1290,7 +1294,7 @@ async function handleAllocationCallback(env, msg, action, args) {
     await editPanel(
       env,
       msg,
-      scaledAmountPrompt(state.moneyUnitFactor),
+      amountReplyNotice(),
       { inline_keyboard: [[btn("❌ لغو", "al:cancel")]] },
     );
     return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
@@ -1319,7 +1323,7 @@ async function handleAllocationCallback(env, msg, action, args) {
     await editPanel(
       env,
       msg,
-      scaledAmountPrompt(state.moneyUnitFactor),
+      amountReplyNotice(),
       { inline_keyboard: [[btn("❌ لغو", "al:cancel")]] },
     );
     return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
@@ -1682,7 +1686,7 @@ async function handleCrud(env, msg, action, args) {
     await editPanel(
       env,
       msg,
-      scaledAmountPrompt(st.moneyUnitFactor),
+      amountReplyNotice(),
       {
         inline_keyboard: [
           [
@@ -1699,7 +1703,7 @@ async function handleCrud(env, msg, action, args) {
   if (action === "money-edit" && p && st.pendingMoney) {
     st.step = "money-input";
     await setState(env, chatId, st);
-    await editPanel(env, msg, scaledAmountPrompt(st.moneyUnitFactor), {
+    await editPanel(env, msg, amountReplyNotice(), {
       inline_keyboard: [
         [
           btn(
@@ -2112,8 +2116,8 @@ async function askField(env, chatId, msg, st, p, mode) {
 
   // فیلدهای متنی/عددی/تاریخ
   const hints = {
-    title: "متن را بفرست.",
-    rich_text: "متن را بفرست.",
+    title: "عنوان را در پیام بعدی وارد کن.",
+    rich_text: "متن را در پیام بعدی وارد کن.",
     number: isMoney
       ? "مبلغ را به <b>تومان</b> بفرست. مثال: <code>۵۵ هزار</code>، <code>2.5 میلیون</code> یا <code>۲ میلیون و پانصد</code>"
       : "یک عدد بفرست.",
@@ -2125,6 +2129,14 @@ async function askField(env, chatId, msg, st, p, mode) {
   if (st.ent === "a" && p.name === "مانده اولیه") {
     hints.number =
       "موجودی حساب را به <b>تومان</b> بفرست. مثال: <code>۲۵۰٬۰۰۰ تومان</code>";
+  }
+  if (st.ent === "b" && p.name === BOX.title) {
+    hints.title =
+      "برای باکس یک نام روشن و قابل‌تشخیص وارد کن؛ مثلاً <code>پس‌انداز سفر</code> یا <code>هزینه‌های خانه</code>.";
+  }
+  if (st.ent === "b" && p.name === "توضیحات باکس") {
+    hints.rich_text =
+      "اگر لازم است کاربرد یا هدف این باکس را توضیح بده تا بعداً راحت‌تر آن را از بقیه باکس‌ها تشخیص بدهی. اگر توضیحی نداری، یک خط تیره بفرست.";
   }
   st.step = "text";
   await setState(env, chatId, st);
