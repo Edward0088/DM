@@ -2251,6 +2251,12 @@ async function startNew(env, chatId, msg, e) {
       st.labels[p.name] = "✅";
     }
   }
+  if (e === "b") {
+    const systemField = schema.props.find(
+      (p) => p.name === BOX.system && p.type === "checkbox",
+    );
+    if (systemField) st.props[BOX.system] = { checkbox: false };
+  }
   if (e === "a") {
     for (const p of schema.props) {
       if (!isAccountOpeningDateField(p)) continue;
@@ -3474,6 +3480,7 @@ const relationProp = (id) => ({ relation: [{ id }] });
 function isHiddenField(e, p) {
   const name = String(p.name || "").trim();
   if (p.type === "unique_id") return true;
+  if (e === "b" && name === BOX.system) return true;
   if ([TX.currency, TX.chartGroup, ACC.currency, AST.currency].includes(name))
     return true;
   if (/^(?:id|شناسه|شناسه‌ی|شناسه ی)(?:\s|$)/i.test(name)) return true;
