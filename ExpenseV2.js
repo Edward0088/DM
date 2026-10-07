@@ -69,6 +69,7 @@ const CAT = {
 const BOX = {
   title: "باکس",
   code: "کد",
+  order: "ترتیب",
   balance: "مانده",
   active: "فعال",
   system: "سیستمی",
@@ -2289,14 +2290,32 @@ async function advanceNew(env, chatId, msg, st) {
   ];
   for (const p of schema.editable) {
     if (st.props[p.name] === undefined) continue;
+    if (
+      st.ent === "b" &&
+      p.name !== BOX.title &&
+      p.name !== BOX.active &&
+      !(p.type === "rich_text" && /توضیح/.test(p.name))
+    )
+      continue;
     const money = isMoneyField(st.ent, p.name);
     const displayName =
       st.ent === "a" && ["مانده اولیه", ACC.balance].includes(p.name)
         ? "موجودی حساب"
-        : p.name;
-    const value = money
-      ? fmt(st.props[p.name]?.number)
-      : (st.labels[p.name] ?? "");
+        : st.ent === "b" && p.name === BOX.title
+          ? "نام باکس"
+          : st.ent === "b" && p.type === "rich_text" && /توضیح/.test(p.name)
+            ? "توضیحات"
+            : st.ent === "b" && p.name === BOX.active
+              ? "وضعیت"
+              : p.name;
+    const value =
+      st.ent === "b" && p.name === BOX.active
+        ? st.props[p.name]?.checkbox
+          ? "✅ فعال"
+          : "⛔ غیرفعال"
+        : money
+          ? fmt(st.props[p.name]?.number)
+          : (st.labels[p.name] ?? "");
     lines.push(
       `${esc(displayName)}: <b>${esc(value)}</b>${money ? " تومان" : ""}`,
     );
@@ -3485,6 +3504,7 @@ function isHiddenField(e, p) {
   if (p.type === "unique_id") return true;
   if (e === "b" && [BOX.system, BOX.incoming, BOX.outgoing].includes(name))
     return true;
+  if (e === "b" && /کد|ترتیب/.test(name)) return true;
   if (e === "b" && (p.type === "relation" || /ورودی|خروجی/.test(name)))
     return true;
   if ([TX.currency, TX.chartGroup, ACC.currency, AST.currency].includes(name))
