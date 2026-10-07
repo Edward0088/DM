@@ -966,7 +966,14 @@ async function continueTxFlow(env, chatId, state, msg = null) {
   const d = state.draft;
   const meta = TYPE_META[d.type];
 
-  if (meta.accountMode === "from" && !d.fromAccount)
+  const boxIsFundingSource = Boolean(
+    d.box && meta.accountMode === "from" && meta.optionalBox,
+  );
+
+  if (meta.optionalBox && !d.box && !d.skipBox)
+    return choose(env, chatId, msg, "box", { optional: true });
+
+  if (meta.accountMode === "from" && !d.fromAccount && !boxIsFundingSource)
     return choose(env, chatId, msg, "acc", { role: "from" });
   if (meta.accountMode === "to" && !d.toAccount)
     return choose(env, chatId, msg, "acc", { role: "to" });
@@ -981,8 +988,6 @@ async function continueTxFlow(env, chatId, state, msg = null) {
   }
 
   if (meta.needsBox && !d.box) return choose(env, chatId, msg, "box");
-  if (meta.optionalBox && !d.box && !d.skipBox)
-    return choose(env, chatId, msg, "box", { optional: true });
 
   if (d.type === "درآمد" && !d.box) {
     const ub = await getUnallocatedBox(env);
@@ -1180,13 +1185,18 @@ async function chooseCategoryChild(
 
 async function sendTxConfirm(env, chatId, state, msg = null) {
   const d = state.draft;
+  const boxIsFundingSource = Boolean(
+    d.box && TYPE_META[d.type].accountMode === "from" && TYPE_META[d.type].optionalBox,
+  );
   const lines = [
     `${TYPE_META[d.type].icon} <b>تأیید تراکنش</b>`,
     "",
     `نوع: ${esc(d.type)}`,
     `عنوان: ${esc(d.title)}`,
     `مبلغ: <b>${fmt(d.amount)} تومان</b>`,
-    d.fromAccount ? `از حساب: ${esc(d.fromAccount.name)}` : null,
+    d.fromAccount && !boxIsFundingSource
+      ? `از حساب: ${esc(d.fromAccount.name)}`
+      : null,
     d.toAccount ? `به حساب: ${esc(d.toAccount.name)}` : null,
     d.box ? `باکس: ${esc(d.box.name)}` : null,
     d.category
@@ -1209,6 +1219,10 @@ async function sendTxConfirm(env, chatId, state, msg = null) {
 }
 
 async function saveTransaction(env, d) {
+  const meta = TYPE_META[d.type];
+  const boxIsFundingSource = Boolean(
+    d.box && meta.accountMode === "from" && meta.optionalBox,
+  );
   const props = {
     [TX.title]: titleProp(d.title),
     [TX.type]: selectProp(d.type),
@@ -1217,7 +1231,8 @@ async function saveTransaction(env, d) {
     [TX.date]: { date: { start: d.date } },
     [TX.status]: selectProp("ثبت‌شده"),
   };
-  if (d.fromAccount) props[TX.fromAccount] = relationProp(d.fromAccount.id);
+  if (d.fromAccount && !boxIsFundingSource)
+    props[TX.fromAccount] = relationProp(d.fromAccount.id);
   if (d.toAccount) props[TX.toAccount] = relationProp(d.toAccount.id);
   if (d.category) props[TX.category] = relationProp(d.category.id);
   if (d.box) props[TX.box] = relationProp(d.box.id);
