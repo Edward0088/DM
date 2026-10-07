@@ -3483,10 +3483,9 @@ const relationProp = (id) => ({ relation: [{ id }] });
 function isHiddenField(e, p) {
   const name = String(p.name || "").trim();
   if (p.type === "unique_id") return true;
-  if (
-    e === "b" &&
-    [BOX.system, BOX.incoming, BOX.outgoing].includes(name)
-  )
+  if (e === "b" && [BOX.system, BOX.incoming, BOX.outgoing].includes(name))
+    return true;
+  if (e === "b" && (p.type === "relation" || /ورودی|خروجی/.test(name)))
     return true;
   if ([TX.currency, TX.chartGroup, ACC.currency, AST.currency].includes(name))
     return true;
