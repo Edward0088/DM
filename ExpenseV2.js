@@ -354,13 +354,24 @@ async function handleText(msg, env) {
     await cleanupMessages(env, chatId);
     return sendMainMenu(env, chatId, "❌ عملیات لغو شد.");
   }
-  if (cmd === "/check") return send(env, chatId, await checkConnections(env));
+  if (cmd === "/check") {
+    await clearActiveMenus(env, chatId, null, { deleteMenus: true }).catch(
+      () => {},
+    );
+    return send(env, chatId, await checkConnections(env));
+  }
   if (cmd === "/csv") {
     await clearState(env, chatId);
+    await clearActiveMenus(env, chatId, null, { deleteMenus: true }).catch(
+      () => {},
+    );
     return reportTableMenu(env, chatId, null);
   }
 
   const state = await getState(env, chatId);
+  await clearActiveMenus(env, chatId, null, {
+    deleteMenus: !state || acceptsTextInput(state),
+  }).catch(() => {});
   if (!state) return sendMainMenu(env, chatId, "از منوی زیر انتخاب کن 👇");
 
   if (state.flow === "new" && state.assetFlow)
@@ -506,6 +517,22 @@ async function handleText(msg, env) {
   );
 }
 
+function acceptsTextInput(state) {
+  if (state.flow === "tx")
+    return ["title", "amount-input", "amount", "assetQty"].includes(
+      state.step,
+    );
+  if (state.flow === "new" && state.assetFlow)
+    return ["title", "description", "price-input", "quantity", "cost-input"].includes(
+      state.assetStep,
+    );
+  if (state.flow === "allocation")
+    return ["amount-input", "percent-input", "amount"].includes(state.step);
+  if (state.flow === "edit" || state.flow === "new")
+    return ["text", "money-input", "rel"].includes(state.step);
+  return state.flow === "report" && state.step === "range";
+}
+
 /* ============================== Callbacks ============================== */
 
 async function handleCallback(cq, env) {
@@ -516,6 +543,17 @@ async function handleCallback(cq, env) {
   const [ns, action, ...args] = String(cq.data || "").split(":");
 
   if (ns === "m" && action === "noop") return;
+  const activeMenuState = await getActiveMenuState(env, msg.chat.id);
+  const activeMenus = activeMenuState.ids;
+  if (
+    activeMenuState.initialized &&
+    !activeMenus.includes(Number(msg.message_id))
+  )
+    return;
+  await clearActiveMenus(env, msg.chat.id, activeMenuState, {
+    deleteMenus: true,
+    keepId: msg.message_id,
+  }).catch(() => {});
   if (ns === "m") return handleMenu(env, msg, action);
   if (ns === "tx") return handleTxCallback(env, msg, action, args);
   if (ns === "al") return handleAllocationCallback(env, msg, action, args);
@@ -2431,7 +2469,12 @@ async function startNewAsset(env, chatId, msg) {
     env,
     chatId,
     "💎 <b>ثبت دارایی جدید</b>\nابتدا عنوانی روشن برای دارایی وارد کن؛ مثلاً «دلار» یا «طلای ۱۸ عیار».",
-    { reply_markup: { force_reply: true, input_field_placeholder: "مثلاً دلار" } },
+    {
+      reply_markup: {
+        force_reply: true,
+        input_field_placeholder: "مثلاً دلار",
+      },
+    },
   );
 }
 
@@ -2474,13 +2517,19 @@ async function handleAssetCreateText(env, chatId, state, text) {
       env,
       chatId,
       `قیمت هر واحد ثبت شد: <b>${fmt(price)} تومان</b>.\nمقدار دارایی را وارد کن:`,
-      { reply_markup: { force_reply: true, input_field_placeholder: "مثلاً ۷" } },
+      {
+        reply_markup: { force_reply: true, input_field_placeholder: "مثلاً ۷" },
+      },
     );
   }
   if (state.assetStep === "quantity") {
     const qty = Number(toEnDigits(text).replace(/,/g, ""));
     if (!(qty > 0) || !Number.isFinite(qty))
-      return send(env, chatId, "مقدار دارایی باید عددی بزرگ‌تر از صفر باشد؛ مثلاً <code>۰٫۵</code>.");
+      return send(
+        env,
+        chatId,
+        "مقدار دارایی باید عددی بزرگ‌تر از صفر باشد؛ مثلاً <code>۰٫۵</code>.",
+      );
     asset.qty = qty;
     state.assetStep = "cost-unit";
     await setState(env, chatId, state);
@@ -2503,19 +2552,31 @@ async function handleAssetCreateText(env, chatId, state, text) {
     await setState(env, chatId, state);
     return showAssetFundingChoices(env, chatId, null, state);
   }
-  return send(env, chatId, "برای ادامه از دکمه‌های پیام استفاده کن یا /cancel را بزن.");
+  return send(
+    env,
+    chatId,
+    "برای ادامه از دکمه‌های پیام استفاده کن یا /cancel را بزن.",
+  );
 }
 
 function showAssetTypeChoices(env, chatId, msg, state) {
   const options = state.types;
   if (!options.length)
-    return panel(env, chatId, msg, "نوع دارایی در تنظیمات دیتابیس گزینه‌ای ندارد.", backHome());
+    return panel(
+      env,
+      chatId,
+      msg,
+      "نوع دارایی در تنظیمات دیتابیس گزینه‌ای ندارد.",
+      backHome(),
+    );
   const rows = chunk(
     options.map((name, index) => btn(name, `x:assettype:${index}`)),
     2,
   );
   rows.push([btn("❌ لغو", "x:x")]);
-  return panel(env, chatId, msg, "نوع دارایی را انتخاب کن:", { inline_keyboard: rows });
+  return panel(env, chatId, msg, "نوع دارایی را انتخاب کن:", {
+    inline_keyboard: rows,
+  });
 }
 
 async function showAssetFundingChoices(env, chatId, msg, state) {
@@ -2541,8 +2602,16 @@ async function showAssetAccountChoices(env, chatId, msg) {
   ]);
   rows.push([btn("❌ لغو", "x:x")]);
   if (!accounts.length)
-    return panel(env, chatId, msg, "حساب فعالی برای ثبت هزینه‌ی خرید پیدا نشد.", backHome());
-  return panel(env, chatId, msg, "هزینه‌ی خرید از کدام حساب پرداخت شد؟", { inline_keyboard: rows });
+    return panel(
+      env,
+      chatId,
+      msg,
+      "حساب فعالی برای ثبت هزینه‌ی خرید پیدا نشد.",
+      backHome(),
+    );
+  return panel(env, chatId, msg, "هزینه‌ی خرید از کدام حساب پرداخت شد؟", {
+    inline_keyboard: rows,
+  });
 }
 
 async function handleAssetCreateCallback(env, msg, state, action, args) {
@@ -2553,11 +2622,15 @@ async function handleAssetCreateCallback(env, msg, state, action, args) {
     await setState(env, chatId, state);
     return showAssetTypeChoices(env, chatId, msg, state);
   }
-  if (action === "unit" && ["price-unit", "cost-unit"].includes(state.assetStep)) {
+  if (
+    action === "unit" &&
+    ["price-unit", "cost-unit"].includes(state.assetStep)
+  ) {
     const factor = amountUnitFactor(args[0]);
     if (!factor) return;
     state.moneyUnitFactor = factor;
-    state.assetStep = state.assetStep === "price-unit" ? "price-input" : "cost-input";
+    state.assetStep =
+      state.assetStep === "price-unit" ? "price-input" : "cost-input";
     await setState(env, chatId, state);
     return sendScaledAmountPrompt(env, chatId, factor);
   }
@@ -2573,7 +2646,10 @@ async function handleAssetCreateCallback(env, msg, state, action, args) {
       "واحد مبلغ نهایی خرید را انتخاب کن:",
     );
   }
-  if (action === "assetsourceedit" && state.assetStep === "insufficient-funds") {
+  if (
+    action === "assetsourceedit" &&
+    state.assetStep === "insufficient-funds"
+  ) {
     delete state.asset.box;
     delete state.asset.account;
     state.assetStep = "box";
@@ -2635,7 +2711,9 @@ function sendAssetCreateConfirm(env, chatId, msg, state) {
     `مقدار: <b>${fa(a.qty)}</b>`,
     `ارزش روز دارایی: <b>${fmt(value)} تومان</b>`,
     `هزینه‌ی نهایی خرید: <b>${fmt(a.cost)} تومان</b>`,
-    a.box ? `پرداخت از باکس: ${esc(a.box.name)}` : `پرداخت از حساب: ${esc(a.account?.name || "")}`,
+    a.box
+      ? `پرداخت از باکس: ${esc(a.box.name)}`
+      : `پرداخت از حساب: ${esc(a.account?.name || "")}`,
     `تاریخ دارایی و تراکنش: ${jalaliStr(a.date)}`,
   ].filter(Boolean);
   return panel(env, chatId, msg, lines.join("\n"), {
@@ -2727,12 +2805,17 @@ async function saveNewAssetAndPurchase(env, chatId, msg, state) {
     throw error;
   }
   await clearState(env, chatId);
-  return editPanel(env, msg, `✅ دارایی «${esc(a.title)}» و تراکنش خرید ${fmt(a.cost)} تومانی ثبت شد.`, {
-    inline_keyboard: [
-      [btn("💎 مشاهده دارایی‌ها", "m:assets")],
-      [btn("🏠 منوی اصلی", "m:home")],
-    ],
-  });
+  return editPanel(
+    env,
+    msg,
+    `✅ دارایی «${esc(a.title)}» و تراکنش خرید ${fmt(a.cost)} تومانی ثبت شد.`,
+    {
+      inline_keyboard: [
+        [btn("💎 مشاهده دارایی‌ها", "m:assets")],
+        [btn("🏠 منوی اصلی", "m:home")],
+      ],
+    },
+  );
 }
 
 async function ensureAssetPurchaseFunds(env, chatId, msg, state) {
@@ -3440,26 +3523,36 @@ async function runReport(env, chatId, msg, st, mode, format = "csv") {
   }
   await clearState(env, chatId);
   if (!sent && failed) {
-    return send(env, chatId, "⚠️ به‌دلیل خطا، گزارشی ساخته نشد. کمی بعد دوباره تلاش کن.", {
-      reply_markup: {
-        inline_keyboard: [
-          [btn("📤 تلاش دوباره", "m:csv"), btn("🏠 منو", "m:home")],
-        ],
+    return send(
+      env,
+      chatId,
+      "⚠️ به‌دلیل خطا، گزارشی ساخته نشد. کمی بعد دوباره تلاش کن.",
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [btn("📤 تلاش دوباره", "m:csv"), btn("🏠 منو", "m:home")],
+          ],
+        },
       },
-    });
+    );
   }
   if (!sent) {
     const target =
       st.ent === "all"
         ? "در هیچ‌یک از بخش‌های انتخاب‌شده"
         : `در بخش «${ENT[st.ent].fa}»`;
-    return send(env, chatId, `ℹ️ ${target} برای این بازه رکوردی پیدا نشد؛ گزارشی ساخته نشد.`, {
-      reply_markup: {
-        inline_keyboard: [
-          [btn("📤 گزارش دیگر", "m:csv"), btn("🏠 منو", "m:home")],
-        ],
+    return send(
+      env,
+      chatId,
+      `ℹ️ ${target} برای این بازه رکوردی پیدا نشد؛ گزارشی ساخته نشد.`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [btn("📤 گزارش دیگر", "m:csv"), btn("🏠 منو", "m:home")],
+          ],
+        },
       },
-    });
+    );
   }
   return send(env, chatId, `✅ ${fa(sent)} فایل ارسال شد.`, {
     reply_markup: {
@@ -4379,17 +4472,29 @@ async function send(env, chatId, text, extra = {}) {
     ...extra,
   });
   await rememberMessage(env, chatId, result).catch(() => {});
+  if (extra.reply_markup?.inline_keyboard?.length)
+    await rememberActiveMenu(env, chatId, result.message_id, true).catch(
+      () => {},
+    );
   return result;
 }
 
-const editPanel = (env, msg, text, keyboard) =>
-  tg(env, "editMessageText", {
+async function editPanel(env, msg, text, keyboard) {
+  const result = await tg(env, "editMessageText", {
     chat_id: msg.chat.id,
     message_id: msg.message_id,
     text,
     parse_mode: "HTML",
     reply_markup: keyboard,
   });
+  await rememberActiveMenu(
+    env,
+    msg.chat.id,
+    result.message_id || msg.message_id,
+    !!keyboard?.inline_keyboard?.length,
+  ).catch(() => {});
+  return result;
+}
 
 // اگر پیام دکمه‌ای داریم ویرایشش می‌کنیم، وگرنه پیام جدید می‌فرستیم
 const panel = (env, chatId, msg, text, kb) =>
@@ -4506,6 +4611,90 @@ async function rememberMessage(env, chatId, msg) {
     .run();
 }
 
+async function getActiveMenuState(env, chatId) {
+  if (!env.DB) return { initialized: false, ids: [] };
+  await ensureStateDb(env);
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k=?")
+    .bind(`ui:menus:${chatId}`)
+    .first();
+  if (!row) return { initialized: false, ids: [] };
+  try {
+    return {
+      initialized: true,
+      ids: JSON.parse(row.v).map(Number).filter(Number.isFinite),
+    };
+  } catch {
+    return { initialized: true, ids: [] };
+  }
+}
+
+async function rememberActiveMenu(env, chatId, messageId, active) {
+  if (!env.DB || !messageId) return;
+  await ensureStateDb(env);
+  const key = `ui:menus:${chatId}`;
+  const state = await getActiveMenuState(env, chatId);
+  const ids = state.ids.filter((id) => id !== Number(messageId));
+  if (active) ids.push(Number(messageId));
+  await env.DB.prepare(
+    "INSERT INTO kv(k,v,exp) VALUES(?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v,exp=excluded.exp",
+  )
+    .bind(key, JSON.stringify(ids.slice(-12)), Date.now() + 7 * 24 * 60 * 60 * 1000)
+    .run();
+}
+
+async function clearActiveMenus(
+  env,
+  chatId,
+  knownState = null,
+  { deleteMenus = false, keepId = null } = {},
+) {
+  if (!env.DB) return;
+  await ensureStateDb(env);
+  const state = knownState || (await getActiveMenuState(env, chatId));
+  let ids = state.ids;
+  if (!state.initialized) {
+    const row = await env.DB.prepare("SELECT v FROM kv WHERE k=?")
+      .bind(`ui:${chatId}`)
+      .first();
+    try {
+      ids = JSON.parse(row?.v || "[]").map(Number).filter(Number.isFinite);
+    } catch {
+      ids = [];
+    }
+  }
+  await Promise.all(
+    ids.map((messageId) =>
+      Number(messageId) === Number(keepId)
+        ? tg(env, "editMessageReplyMarkup", {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: { inline_keyboard: [] },
+          }).catch(() => {})
+        : deleteMenus && state.initialized
+          ? tg(env, "deleteMessage", {
+              chat_id: chatId,
+              message_id: messageId,
+            }).catch(() =>
+              tg(env, "editMessageReplyMarkup", {
+                chat_id: chatId,
+                message_id: messageId,
+                reply_markup: { inline_keyboard: [] },
+              }).catch(() => {}),
+            )
+          : tg(env, "editMessageReplyMarkup", {
+              chat_id: chatId,
+              message_id: messageId,
+              reply_markup: { inline_keyboard: [] },
+            }).catch(() => {}),
+    ),
+  );
+  await env.DB.prepare(
+    "INSERT INTO kv(k,v,exp) VALUES(?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v,exp=excluded.exp",
+  )
+    .bind(`ui:menus:${chatId}`, "[]", Date.now() + 7 * 24 * 60 * 60 * 1000)
+    .run();
+}
+
 async function cleanupMessages(env, chatId, keepId = null) {
   if (!env.DB) return;
   await ensureStateDb(env);
@@ -4530,6 +4719,9 @@ async function cleanupMessages(env, chatId, keepId = null) {
     "INSERT INTO kv(k,v,exp) VALUES(?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v, exp=excluded.exp",
   )
     .bind(key, JSON.stringify(kept), Date.now() + 7 * 24 * 60 * 60 * 1000)
+    .run();
+  await env.DB.prepare("DELETE FROM kv WHERE k=?")
+    .bind(`ui:menus:${chatId}`)
     .run();
 }
 
