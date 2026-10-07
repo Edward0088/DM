@@ -2440,20 +2440,33 @@ async function loadMarketPrices() {
     { key: "coin-baharazadi-rob", label: "🔹 ربع‌سکه" },
     { key: "coin-gerami", label: "🟤 سکه گرمی" },
   ];
-  const results = await Promise.all(
-    items.map(async (item) => {
-      const response = await fetch(
-        `https://api.priceto.day/v1/latest/irr/${encodeURIComponent(item.key)}`,
-        { headers: { Accept: "application/json" } },
+  const results = [];
+  for (const item of items) {
+    const response = await fetch(
+      `https://api.priceto.day/v1/latest/irr/${encodeURIComponent(item.key)}`,
+      {
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "ExpenseBot/1.0",
+        },
+      },
+    );
+    if (!response.ok) {
+      const detail = (await response.text())
+        .replace(/<[^>]*>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 240);
+      throw new Error(
+        `سرویس قیمت با کد ${response.status} پاسخ داد.${detail ? ` جزئیات: ${detail}` : ""}`,
       );
-      if (!response.ok) throw new Error(`سرویس قیمت با کد ${response.status} پاسخ داد.`);
-      const body = await response.json();
-      if (body.success === false) throw new Error("سرویس قیمت دریافت نرخ را تأیید نکرد.");
-      const price = marketPriceValue(body);
-      if (!(price > 0)) throw new Error(`قیمت «${item.key}» در پاسخ سرویس پیدا نشد.`);
-      return { ...item, price, updatedAt: marketPriceTimestamp(body) };
-    }),
-  );
+    }
+    const body = await response.json();
+    if (body.success === false) throw new Error("سرویس قیمت دریافت نرخ را تأیید نکرد.");
+    const price = marketPriceValue(body);
+    if (!(price > 0)) throw new Error(`قیمت «${item.key}» در پاسخ سرویس پیدا نشد.`);
+    results.push({ ...item, price, updatedAt: marketPriceTimestamp(body) });
+  }
 
   const byKey = new Map(results.map((item) => [item.key, item]));
   const miskal = byKey.get("gold-miskal").price;
