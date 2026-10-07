@@ -1840,7 +1840,6 @@ async function listEntity(env, chatId, msg, e, page = 0) {
       btn("📈 خرید دارایی", "tx:type:خرید دارایی"),
       btn("📉 فروش دارایی", "tx:type:فروش دارایی"),
     ]);
-  if (e === "s") kb.push([btn("💱 قیمت ارز و طلا", "m:assetprices")]);
   kb.push([btn("🏠 منوی اصلی", "m:home")]);
 
   const text =
