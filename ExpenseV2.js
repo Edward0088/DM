@@ -2421,7 +2421,7 @@ async function handleAssetCreateText(env, chatId, state, text) {
     return send(
       env,
       chatId,
-      `قیمت پایه‌ی هر واحد «${esc(asset.title)}» برابر <b>${fmt(price)} تومان</b> ثبت می‌شود.\nحالا مقدار دارایی را وارد کن؛ مثلاً <code>۶</code> گرم یا <code>۷</code> واحد.`,
+      `قیمت هر واحد ثبت شد: <b>${fmt(price)} تومان</b>.\nمقدار دارایی را وارد کن:`,
       { reply_markup: { force_reply: true, input_field_placeholder: "مثلاً ۷" } },
     );
   }
