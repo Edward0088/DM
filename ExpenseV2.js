@@ -2521,7 +2521,7 @@ async function handleAssetCreateCallback(env, msg, state, action, args) {
       msg,
       "x",
       "x:x",
-      `واحد مبلغِ قیمت فعلی هر واحد «${esc(state.asset.title)}» را انتخاب کن. این قیمت پایه‌ی محاسبه‌ی ارزش روز دارایی است و با مبلغ نهایی خرید تفاوت دارد. نرخ را بر اساس واحد همان دارایی وارد می‌کنی؛ مثلاً هر گرم، هر عدد یا هر واحد.`,
+      "واحد قیمت فعلی هر واحد دارایی را انتخاب کن:",
     );
   }
   if (action === "assetbox" && state.assetStep === "box") {
