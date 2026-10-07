@@ -833,12 +833,24 @@ async function handleTxCallback(env, msg, action, args) {
   }
 
   if (action === "amount-edit") {
+    if (!state.moneyUnitFactor) state.moneyUnitFactor = 1_000;
     state.step = "amount-input";
     await setState(env, chatId, state);
     await editPanel(env, msg, amountReplyNotice(), {
       inline_keyboard: [[btn("❌ لغو", "tx:cancel")]],
     });
     return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
+  }
+
+  if (action === "source-edit") {
+    const meta = TYPE_META[state.draft.type];
+    delete state.draft.box;
+    delete state.draft.fromAccount;
+    state.draft.skipBox = false;
+    await setState(env, chatId, state);
+    if (meta.optionalBox)
+      return choose(env, chatId, msg, "box", { optional: true });
+    return choose(env, chatId, msg, "acc", { role: "from" });
   }
 
   if (action === "amount-ok" && state.step === "amount-review") {
@@ -959,6 +971,7 @@ async function handleTxCallback(env, msg, action, args) {
   }
 
   if (action === "save") {
+    if (!(await ensureTransactionFunds(env, chatId, state, msg))) return;
     await saveTransaction(env, state.draft);
     await clearState(env, chatId);
     return editPanel(
@@ -1021,6 +1034,8 @@ async function continueTxFlow(env, chatId, state, msg = null) {
       });
   }
 
+  if (!(await ensureTransactionFunds(env, chatId, state, msg))) return;
+
   if (meta.needsBox && !d.box) return choose(env, chatId, msg, "box");
   if (meta.needsCategory && !d.category)
     return chooseCategoryRoot(env, chatId, msg);
@@ -1039,6 +1054,43 @@ async function continueTxFlow(env, chatId, state, msg = null) {
   state.step = "confirm";
   await setState(env, chatId, state);
   return sendTxConfirm(env, chatId, state, msg);
+}
+
+async function ensureTransactionFunds(env, chatId, state, msg = null) {
+  const d = state.draft;
+  const meta = TYPE_META[d.type];
+  if (!(d.amount > 0) || !["from", "both"].includes(meta.accountMode))
+    return true;
+
+  let balance;
+  let sourceName;
+  if (d.box && meta.optionalBox) {
+    balance = await getBoxBalance(env, d.box.id);
+    sourceName = `باکس «${d.box.name}»`;
+  } else if (d.fromAccount) {
+    balance = await getAccountBalance(env, d.fromAccount.id);
+    sourceName = `حساب «${d.fromAccount.name}»`;
+  } else {
+    return true;
+  }
+  if (d.amount <= balance) return true;
+
+  state.step = "insufficient-funds";
+  await setState(env, chatId, state);
+  await panel(
+    env,
+    chatId,
+    msg,
+    `❌ موجودی ${sourceName} کافی نیست.\nمبلغ تراکنش: <b>${fmt(d.amount)} تومان</b>\nموجودی فعلی: <b>${fmt(balance)} تومان</b>\n\nحساب یا باکس را شارژ کن، یا مبلغ/منبع پرداخت را تغییر بده.`,
+    {
+      inline_keyboard: [
+        [btn("✏️ تغییر مبلغ", "tx:amount-edit")],
+        [btn("🔄 تغییر منبع پرداخت", "tx:source-edit")],
+        [btn("❌ لغو", "tx:cancel")],
+      ],
+    },
+  );
+  return false;
 }
 
 // انتخابگر عمومی با صفحه‌بندی (حساب / باکس / دسته‌بندی / دارایی)
@@ -2509,6 +2561,25 @@ async function handleAssetCreateCallback(env, msg, state, action, args) {
     await setState(env, chatId, state);
     return sendScaledAmountPrompt(env, chatId, factor);
   }
+  if (action === "assetcostedit" && state.assetStep === "insufficient-funds") {
+    state.assetStep = "cost-unit";
+    await setState(env, chatId, state);
+    return showMoneyUnitChoice(
+      env,
+      chatId,
+      msg,
+      "x",
+      "x:x",
+      "واحد مبلغ نهایی خرید را انتخاب کن:",
+    );
+  }
+  if (action === "assetsourceedit" && state.assetStep === "insufficient-funds") {
+    delete state.asset.box;
+    delete state.asset.account;
+    state.assetStep = "box";
+    await setState(env, chatId, state);
+    return showAssetFundingChoices(env, chatId, msg, state);
+  }
   if (action === "assettype" && state.assetStep === "type") {
     const type = state.types[Number(args[0])];
     if (!type) return;
@@ -2528,6 +2599,7 @@ async function handleAssetCreateCallback(env, msg, state, action, args) {
     const box = (await listBoxes(env)).find((x) => idEq(x.id, args[0]));
     if (!box) return;
     state.asset.box = box;
+    if (!(await ensureAssetPurchaseFunds(env, chatId, msg, state))) return;
     state.assetStep = "confirm";
     await setState(env, chatId, state);
     return sendAssetCreateConfirm(env, chatId, msg, state);
@@ -2541,6 +2613,7 @@ async function handleAssetCreateCallback(env, msg, state, action, args) {
     const account = (await listAccounts(env)).find((x) => idEq(x.id, args[0]));
     if (!account) return;
     state.asset.account = account;
+    if (!(await ensureAssetPurchaseFunds(env, chatId, msg, state))) return;
     state.assetStep = "confirm";
     await setState(env, chatId, state);
     return sendAssetCreateConfirm(env, chatId, msg, state);
@@ -2575,6 +2648,7 @@ function sendAssetCreateConfirm(env, chatId, msg, state) {
 
 async function saveNewAssetAndPurchase(env, chatId, msg, state) {
   const a = state.asset;
+  if (!(await ensureAssetPurchaseFunds(env, chatId, msg, state))) return;
   const fields = state.fields;
   const typeField = fields.type;
   const properties = {
@@ -2659,6 +2733,36 @@ async function saveNewAssetAndPurchase(env, chatId, msg, state) {
       [btn("🏠 منوی اصلی", "m:home")],
     ],
   });
+}
+
+async function ensureAssetPurchaseFunds(env, chatId, msg, state) {
+  const a = state.asset;
+  const balance = a.box
+    ? await getBoxBalance(env, a.box.id)
+    : a.account
+      ? await getAccountBalance(env, a.account.id)
+      : null;
+  if (balance === null || a.cost <= balance) return true;
+
+  const sourceName = a.box
+    ? `باکس «${a.box.name}»`
+    : `حساب «${a.account.name}»`;
+  state.assetStep = "insufficient-funds";
+  await setState(env, chatId, state);
+  await panel(
+    env,
+    chatId,
+    msg,
+    `❌ موجودی ${sourceName} کافی نیست.\nمبلغ خرید: <b>${fmt(a.cost)} تومان</b>\nموجودی فعلی: <b>${fmt(balance)} تومان</b>\n\nحساب یا باکس را شارژ کن، یا مبلغ/منبع پرداخت را تغییر بده.`,
+    {
+      inline_keyboard: [
+        [btn("✏️ تغییر مبلغ خرید", "x:assetcostedit")],
+        [btn("🔄 تغییر منبع پرداخت", "x:assetsourceedit")],
+        [btn("❌ لغو", "x:x")],
+      ],
+    },
+  );
+  return false;
 }
 
 async function startNew(env, chatId, msg, e) {
@@ -3298,20 +3402,14 @@ async function runReport(env, chatId, msg, st, mode, format = "csv") {
   await panel(env, chatId, msg, "⏳ در حال ساخت گزارش…");
   const list = st.ent === "all" ? ENT_ORDER : [st.ent];
   let sent = 0;
+  let failed = 0;
   for (const e of list) {
     try {
       const r =
         mode === "detail"
           ? await buildDetail(env, e, st.range)
           : await buildSummary(env, e, st.range, mode);
-      if (!r.count && mode !== "detail") {
-        await send(
-          env,
-          chatId,
-          `ℹ️ ${esc(ENT[e].fa)}: داده‌ای در این بازه نبود.`,
-        );
-        continue;
-      }
+      if (!r.count) continue;
       const label = ENT[e].date ? rangeLabel(st.range) : "همه";
       if (format === "pdf") {
         const pdf = await renderReportPdf(env, r, ENT[e], label, mode);
@@ -3336,10 +3434,33 @@ async function runReport(env, chatId, msg, st, mode, format = "csv") {
       }
       sent++;
     } catch (err) {
+      failed++;
       await send(env, chatId, `⚠️ ${esc(ENT[e].fa)}: ${esc(err.message)}`);
     }
   }
   await clearState(env, chatId);
+  if (!sent && failed) {
+    return send(env, chatId, "⚠️ به‌دلیل خطا، گزارشی ساخته نشد. کمی بعد دوباره تلاش کن.", {
+      reply_markup: {
+        inline_keyboard: [
+          [btn("📤 تلاش دوباره", "m:csv"), btn("🏠 منو", "m:home")],
+        ],
+      },
+    });
+  }
+  if (!sent) {
+    const target =
+      st.ent === "all"
+        ? "در هیچ‌یک از بخش‌های انتخاب‌شده"
+        : `در بخش «${ENT[st.ent].fa}»`;
+    return send(env, chatId, `ℹ️ ${target} برای این بازه رکوردی پیدا نشد؛ گزارشی ساخته نشد.`, {
+      reply_markup: {
+        inline_keyboard: [
+          [btn("📤 گزارش دیگر", "m:csv"), btn("🏠 منو", "m:home")],
+        ],
+      },
+    });
+  }
   return send(env, chatId, `✅ ${fa(sent)} فایل ارسال شد.`, {
     reply_markup: {
       inline_keyboard: [
