@@ -2391,11 +2391,17 @@ async function handleAssetCreateText(env, chatId, state, text) {
     asset.title = text;
     state.assetStep = "description";
     await setState(env, chatId, state);
-    return send(
+    return panel(
       env,
       chatId,
+      null,
       "توضیحات دارایی را وارد کن؛ اگر توضیحی نداری «-» بفرست.",
-      { reply_markup: { force_reply: true, input_field_placeholder: "توضیحات اختیاری" } },
+      {
+        inline_keyboard: [
+          [btn("⏭ رد کردن توضیحات", "x:assetdescskip")],
+          [btn("❌ لغو", "x:x")],
+        ],
+      },
     );
   }
   if (state.assetStep === "description") {
@@ -2404,12 +2410,13 @@ async function handleAssetCreateText(env, chatId, state, text) {
     await setState(env, chatId, state);
     return showAssetTypeChoices(env, chatId, null, state);
   }
-  if (state.assetStep === "price") {
-    const price = parseAmountStrict(text);
+  if (state.assetStep === "price-input") {
+    const price = parseScaledAmount(text, state.moneyUnitFactor);
     if (!(price > 0))
-      return send(env, chatId, "قیمت فعلی هر واحد را به تومان وارد کن؛ مثلاً <code>۲۳۰ هزار</code>.");
+      return send(env, chatId, scaledAmountError(state.moneyUnitFactor));
     asset.currentPrice = price;
     state.assetStep = "quantity";
+    delete state.moneyUnitFactor;
     await setState(env, chatId, state);
     return send(
       env,
@@ -2423,21 +2430,24 @@ async function handleAssetCreateText(env, chatId, state, text) {
     if (!(qty > 0) || !Number.isFinite(qty))
       return send(env, chatId, "مقدار دارایی باید عددی بزرگ‌تر از صفر باشد؛ مثلاً <code>۰٫۵</code>.");
     asset.qty = qty;
-    state.assetStep = "cost";
+    state.assetStep = "cost-unit";
     await setState(env, chatId, state);
-    return send(
+    return showMoneyUnitChoice(
       env,
       chatId,
-      "مبلغ نهایی خرید را به تومان وارد کن؛ این مبلغ به‌عنوان هزینه‌ی تراکنش ثبت و از باکس یا حساب انتخابی کسر می‌شود.",
-      { reply_markup: { force_reply: true, input_field_placeholder: "مثلاً ۱ میلیون و ۶۰۰ هزار" } },
+      null,
+      "x",
+      "x:x",
+      "💰 مبلغ نهایی خرید را به چه واحدی وارد می‌کنی؟ این مبلغ به‌عنوان هزینه‌ی تراکنش ثبت و از باکس یا حساب انتخابی کسر می‌شود:",
     );
   }
-  if (state.assetStep === "cost") {
-    const cost = parseAmountStrict(text);
+  if (state.assetStep === "cost-input") {
+    const cost = parseScaledAmount(text, state.moneyUnitFactor);
     if (!(cost > 0))
-      return send(env, chatId, "مبلغ نهایی خرید باید بیشتر از صفر باشد؛ مثلاً <code>۱ میلیون و ۶۰۰ هزار</code>.");
+      return send(env, chatId, scaledAmountError(state.moneyUnitFactor));
     asset.cost = cost;
     state.assetStep = "box";
+    delete state.moneyUnitFactor;
     await setState(env, chatId, state);
     return showAssetFundingChoices(env, chatId, null, state);
   }
@@ -2485,17 +2495,33 @@ async function showAssetAccountChoices(env, chatId, msg) {
 
 async function handleAssetCreateCallback(env, msg, state, action, args) {
   const chatId = msg.chat.id;
+  if (action === "assetdescskip" && state.assetStep === "description") {
+    state.asset.description = "";
+    state.assetStep = "type";
+    await setState(env, chatId, state);
+    return showAssetTypeChoices(env, chatId, msg, state);
+  }
+  if (action === "unit" && ["price-unit", "cost-unit"].includes(state.assetStep)) {
+    const factor = amountUnitFactor(args[0]);
+    if (!factor) return;
+    state.moneyUnitFactor = factor;
+    state.assetStep = state.assetStep === "price-unit" ? "price-input" : "cost-input";
+    await setState(env, chatId, state);
+    return sendScaledAmountPrompt(env, chatId, factor);
+  }
   if (action === "assettype" && state.assetStep === "type") {
     const type = state.types[Number(args[0])];
     if (!type) return;
     state.asset.type = type;
-    state.assetStep = "price";
+    state.assetStep = "price-unit";
     await setState(env, chatId, state);
-    return send(
+    return showMoneyUnitChoice(
       env,
       chatId,
-      `قیمت فعلی هر واحد «${esc(state.asset.title)}» را به تومان وارد کن. این قیمت پایه‌ی ارزش روز دارایی است و با مبلغ نهایی خرید تفاوت دارد؛ مثلاً قیمت هر دلار <code>۲۳۰٬۰۰۰ تومان</code>.`,
-      { reply_markup: { force_reply: true, input_field_placeholder: "مثلاً ۲۳۰ هزار" } },
+      msg,
+      "x",
+      "x:x",
+      `واحد مبلغِ قیمت فعلی هر واحد «${esc(state.asset.title)}» را انتخاب کن. این قیمت پایه‌ی محاسبه‌ی ارزش روز دارایی است و با مبلغ نهایی خرید تفاوت دارد. نرخ را بر اساس واحد همان دارایی وارد می‌کنی؛ مثلاً هر گرم، هر عدد یا هر واحد.`,
     );
   }
   if (action === "assetbox" && state.assetStep === "box") {
