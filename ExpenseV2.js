@@ -124,6 +124,7 @@ const TYPE_META = {
     chart: null,
     accountMode: "to",
     needsBox: false,
+    optionalBox: true,
     optionalCategory: true,
   },
   انتقال: {
@@ -145,6 +146,7 @@ const TYPE_META = {
     icon: "📉",
     chart: "دارایی",
     accountMode: "to",
+    optionalBox: true,
     needsBox: false,
     needsCategory: false,
     needsAsset: true,
@@ -361,6 +363,9 @@ async function handleText(msg, env) {
   const state = await getState(env, chatId);
   if (!state) return sendMainMenu(env, chatId, "از منوی زیر انتخاب کن 👇");
 
+  if (state.flow === "new" && state.assetFlow)
+    return handleAssetCreateText(env, chatId, state, text);
+
   // ---- ثبت تراکنش ----
   if (state.flow === "tx" && state.step === "title") {
     if (!text || text.length > 200) {
@@ -380,7 +385,13 @@ async function handleText(msg, env) {
     state.pendingAmount = amount;
     state.step = "amount-review";
     await setState(env, chatId, state);
-    return sendAmountReview(env, chatId, amount, "tx:amount-ok", "tx:amount-edit");
+    return sendAmountReview(
+      env,
+      chatId,
+      amount,
+      "tx:amount-ok",
+      "tx:amount-edit",
+    );
   }
 
   // سازگاری با ورودی‌هایی که پیش از انتشار این مسیر شروع شده‌اند.
@@ -417,20 +428,40 @@ async function handleText(msg, env) {
     state.pendingAmount = amount;
     state.step = "amount-review";
     await setState(env, chatId, state);
-    return sendAmountReview(env, chatId, amount, "al:amount-ok", "al:amount-edit");
+    return sendAmountReview(
+      env,
+      chatId,
+      amount,
+      "al:amount-ok",
+      "al:amount-edit",
+    );
   }
   if (state.flow === "allocation" && state.step === "percent-input") {
     const percent = parsePercentInput(text);
     if (!(percent > 0 && percent <= 100))
-      return send(env, chatId, "❌ درصد را از ۱ تا ۱۰۰ وارد کن؛ مثلاً <code>۲۵</code>.");
+      return send(
+        env,
+        chatId,
+        "❌ درصد را از ۱ تا ۱۰۰ وارد کن؛ مثلاً <code>۲۵</code>.",
+      );
     const amount = Math.round((state.maxAmount * percent) / 100);
     if (!(amount > 0))
-      return send(env, chatId, "❌ این درصد از موجودی مبلغ قابل تخصیصی ایجاد نمی‌کند.");
+      return send(
+        env,
+        chatId,
+        "❌ این درصد از موجودی مبلغ قابل تخصیصی ایجاد نمی‌کند.",
+      );
     state.pendingAmount = amount;
     state.selectedPercent = percent;
     state.step = "amount-review";
     await setState(env, chatId, state);
-    return sendAmountReview(env, chatId, amount, "al:amount-ok", "al:amount-edit");
+    return sendAmountReview(
+      env,
+      chatId,
+      amount,
+      "al:amount-ok",
+      "al:amount-edit",
+    );
   }
   if (state.flow === "allocation" && state.step === "amount") {
     const amount = parseAmountOnly(text);
@@ -505,7 +536,8 @@ async function handleMenu(env, msg, action) {
     categories: "c",
   };
   if (listMap[action]) return listEntity(env, chatId, msg, listMap[action], 0);
-  if (action === "assetpricesrefresh") marketPriceCache = { expiresAt: 0, text: null };
+  if (action === "assetpricesrefresh")
+    marketPriceCache = { expiresAt: 0, text: null };
   if (action === "assetprices" || action === "assetpricesrefresh")
     return showMarketPrices(env, msg);
 
@@ -532,7 +564,12 @@ async function handleMenu(env, msg, action) {
       },
     );
   if (action === "goals")
-    return editPanel(env, msg, "⏸ بخش اهداف مالی فعلاً غیرفعال است.", backHome());
+    return editPanel(
+      env,
+      msg,
+      "⏸ بخش اهداف مالی فعلاً غیرفعال است.",
+      backHome(),
+    );
 
   if (action === "home") {
     await cleanupMessages(env, chatId, msg.message_id);
@@ -546,8 +583,7 @@ async function handleMenu(env, msg, action) {
       txTypeKeyboard(),
     );
   }
-  if (action === "help")
-    return editPanel(env, msg, helpText(), backHome());
+  if (action === "help") return editPanel(env, msg, helpText(), backHome());
   if (action === "report") return showOverview(env, msg);
   if (action === "csv") return reportTableMenu(env, chatId, msg);
   if (action === "check")
@@ -599,7 +635,10 @@ function mainMenuKeyboard() {
   return {
     inline_keyboard: [
       [btn("🏦 حساب‌ها", "m:accounts"), btn("📦 باکس‌ها", "m:boxes")],
-      [btn("💳 تراکنش", "m:transactions"), btn("🎯 تخصیص منابع", "m:allocations")],
+      [
+        btn("💳 تراکنش", "m:transactions"),
+        btn("🎯 تخصیص منابع", "m:allocations"),
+      ],
       [btn("💎 دارایی‌ها", "m:assets"), btn("🏷 دسته‌بندی‌ها", "m:categories")],
       [btn("📊 داشبورد مالی", "m:report"), btn("📤 دریافت گزارش", "m:csv")],
       [btn("⚙️ وضعیت سرویس‌ها", "m:check"), btn("📖 راهنما", "m:help")],
@@ -632,7 +671,10 @@ function txTypeKeyboard() {
     inline_keyboard: [
       [btn("💸 هزینه", "tx:type:هزینه"), btn("💰 درآمد", "tx:type:درآمد")],
       [btn("🔁 انتقال", "tx:type:انتقال")],
-      [btn("📈 خرید دارایی", "tx:type:خرید دارایی"), btn("📉 فروش دارایی", "tx:type:فروش دارایی")],
+      [
+        btn("📈 خرید دارایی", "tx:type:خرید دارایی"),
+        btn("📉 فروش دارایی", "tx:type:فروش دارایی"),
+      ],
       [btn("🏠 بازگشت", "m:home")],
     ],
   };
@@ -683,7 +725,8 @@ function sendScaledAmountPrompt(env, chatId, factor) {
   return send(env, chatId, scaledAmountPrompt(factor), {
     reply_markup: {
       force_reply: true,
-      input_field_placeholder: factor === 1_000_000 ? "مثلاً ۳۲ یا ۱٫۵" : "مثلاً ۵۰۰ یا ۱٫۵",
+      input_field_placeholder:
+        factor === 1_000_000 ? "مثلاً ۳۲ یا ۱٫۵" : "مثلاً ۵۰۰ یا ۱٫۵",
     },
   });
 }
@@ -742,17 +785,12 @@ async function handleTxCallback(env, msg, action, args) {
       `${TYPE_META[type].icon} <b>${esc(type)} انتخاب شد.</b>`,
       { inline_keyboard: [[btn("❌ لغو", "tx:cancel")]] },
     );
-    return send(
-      env,
-      chatId,
-      `📝 عنوان ${esc(type)} را وارد کن.`,
-      {
-        reply_markup: {
-          force_reply: true,
-          input_field_placeholder: "مثلاً خرید روزانه",
-        },
+    return send(env, chatId, `📝 عنوان ${esc(type)} را وارد کن.`, {
+      reply_markup: {
+        force_reply: true,
+        input_field_placeholder: "مثلاً خرید روزانه",
       },
-    );
+    });
   }
 
   if (action === "cancel") {
@@ -788,24 +826,18 @@ async function handleTxCallback(env, msg, action, args) {
     if (!state.moneyUnitFactor) return;
     state.step = "amount-input";
     await setState(env, chatId, state);
-    await editPanel(
-      env,
-      msg,
-      amountReplyNotice(),
-      { inline_keyboard: [[btn("❌ لغو", "tx:cancel")]] },
-    );
+    await editPanel(env, msg, amountReplyNotice(), {
+      inline_keyboard: [[btn("❌ لغو", "tx:cancel")]],
+    });
     return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
   }
 
   if (action === "amount-edit") {
     state.step = "amount-input";
     await setState(env, chatId, state);
-    await editPanel(
-      env,
-      msg,
-      amountReplyNotice(),
-      { inline_keyboard: [[btn("❌ لغو", "tx:cancel")]] },
-    );
+    await editPanel(env, msg, amountReplyNotice(), {
+      inline_keyboard: [[btn("❌ لغو", "tx:cancel")]],
+    });
     return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
   }
 
@@ -966,16 +998,18 @@ async function continueTxFlow(env, chatId, state, msg = null) {
   const d = state.draft;
   const meta = TYPE_META[d.type];
 
-  const boxIsFundingSource = Boolean(
-    d.box && meta.accountMode === "from" && meta.optionalBox,
-  );
+  if (d.type === "درآمد" && !d.box) {
+    const unallocated = await getUnallocatedBox(env);
+    if (unallocated) d.box = unallocated;
+  }
 
   if (meta.optionalBox && !d.box && !d.skipBox)
     return choose(env, chatId, msg, "box", { optional: true });
 
-  if (meta.accountMode === "from" && !d.fromAccount && !boxIsFundingSource)
+  const boxReplacesAccount = Boolean(d.box && meta.optionalBox);
+  if (meta.accountMode === "from" && !d.fromAccount && !boxReplacesAccount)
     return choose(env, chatId, msg, "acc", { role: "from" });
-  if (meta.accountMode === "to" && !d.toAccount)
+  if (meta.accountMode === "to" && !d.toAccount && !boxReplacesAccount)
     return choose(env, chatId, msg, "acc", { role: "to" });
   if (meta.accountMode === "both") {
     if (!d.fromAccount)
@@ -988,12 +1022,6 @@ async function continueTxFlow(env, chatId, state, msg = null) {
   }
 
   if (meta.needsBox && !d.box) return choose(env, chatId, msg, "box");
-
-  if (d.type === "درآمد" && !d.box) {
-    const ub = await getUnallocatedBox(env);
-    if (ub) d.box = ub;
-  }
-
   if (meta.needsCategory && !d.category)
     return chooseCategoryRoot(env, chatId, msg);
   if (meta.optionalCategory && !d.category && !d.skipCategory)
@@ -1185,19 +1213,19 @@ async function chooseCategoryChild(
 
 async function sendTxConfirm(env, chatId, state, msg = null) {
   const d = state.draft;
-  const boxIsFundingSource = Boolean(
-    d.box && TYPE_META[d.type].accountMode === "from" && TYPE_META[d.type].optionalBox,
-  );
+  const boxReplacesAccount = Boolean(d.box && TYPE_META[d.type].optionalBox);
   const lines = [
     `${TYPE_META[d.type].icon} <b>تأیید تراکنش</b>`,
     "",
     `نوع: ${esc(d.type)}`,
     `عنوان: ${esc(d.title)}`,
     `مبلغ: <b>${fmt(d.amount)} تومان</b>`,
-    d.fromAccount && !boxIsFundingSource
+    d.fromAccount && !boxReplacesAccount
       ? `از حساب: ${esc(d.fromAccount.name)}`
       : null,
-    d.toAccount ? `به حساب: ${esc(d.toAccount.name)}` : null,
+    d.toAccount && !boxReplacesAccount
+      ? `به حساب: ${esc(d.toAccount.name)}`
+      : null,
     d.box ? `باکس: ${esc(d.box.name)}` : null,
     d.category
       ? `دسته‌بندی: ${esc(d.category.icon || "🏷")} ${esc(d.category.name)}`
@@ -1219,10 +1247,7 @@ async function sendTxConfirm(env, chatId, state, msg = null) {
 }
 
 async function saveTransaction(env, d) {
-  const meta = TYPE_META[d.type];
-  const boxIsFundingSource = Boolean(
-    d.box && meta.accountMode === "from" && meta.optionalBox,
-  );
+  const boxReplacesAccount = Boolean(d.box && TYPE_META[d.type].optionalBox);
   const props = {
     [TX.title]: titleProp(d.title),
     [TX.type]: selectProp(d.type),
@@ -1231,9 +1256,10 @@ async function saveTransaction(env, d) {
     [TX.date]: { date: { start: d.date } },
     [TX.status]: selectProp("ثبت‌شده"),
   };
-  if (d.fromAccount && !boxIsFundingSource)
+  if (d.fromAccount && !boxReplacesAccount)
     props[TX.fromAccount] = relationProp(d.fromAccount.id);
-  if (d.toAccount) props[TX.toAccount] = relationProp(d.toAccount.id);
+  if (d.toAccount && !boxReplacesAccount)
+    props[TX.toAccount] = relationProp(d.toAccount.id);
   if (d.category) props[TX.category] = relationProp(d.category.id);
   if (d.box) props[TX.box] = relationProp(d.box.id);
   if (d.asset) props[TX.asset] = relationProp(d.asset.id);
@@ -1269,13 +1295,18 @@ async function startAllocation(env, msg) {
     draft: { date: todayTehran(), status: "ثبت‌شده" },
   };
   await setState(env, msg.chat.id, state);
-  return editPanel(env, msg, "🎯 <b>انتقال بین حساب و باکس</b>\nجهت انتقال را انتخاب کن:", {
-    inline_keyboard: [
-      [btn("🏦 حساب به باکس", "al:assign")],
-      [btn("📦 باکس به حساب", "al:release")],
-      [btn("🏠 منوی اصلی", "m:home")],
-    ],
-  });
+  return editPanel(
+    env,
+    msg,
+    "🎯 <b>انتقال بین حساب و باکس</b>\nجهت انتقال را انتخاب کن:",
+    {
+      inline_keyboard: [
+        [btn("🏦 حساب به باکس", "al:assign")],
+        [btn("📦 باکس به حساب", "al:release")],
+        [btn("🏠 منوی اصلی", "m:home")],
+      ],
+    },
+  );
 }
 
 async function handleAllocationCallback(env, msg, action, args) {
@@ -1315,12 +1346,9 @@ async function handleAllocationCallback(env, msg, action, args) {
     if (!state.moneyUnitFactor) return;
     state.step = "amount-input";
     await setState(env, chatId, state);
-    await editPanel(
-      env,
-      msg,
-      amountReplyNotice(),
-      { inline_keyboard: [[btn("❌ لغو", "al:cancel")]] },
-    );
+    await editPanel(env, msg, amountReplyNotice(), {
+      inline_keyboard: [[btn("❌ لغو", "al:cancel")]],
+    });
     return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
   }
 
@@ -1344,12 +1372,9 @@ async function handleAllocationCallback(env, msg, action, args) {
     }
     state.step = "amount-input";
     await setState(env, chatId, state);
-    await editPanel(
-      env,
-      msg,
-      amountReplyNotice(),
-      { inline_keyboard: [[btn("❌ لغو", "al:cancel")]] },
-    );
+    await editPanel(env, msg, amountReplyNotice(), {
+      inline_keyboard: [[btn("❌ لغو", "al:cancel")]],
+    });
     return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
   }
 
@@ -1361,26 +1386,43 @@ async function handleAllocationCallback(env, msg, action, args) {
     return sendAllocationConfirm(env, chatId, state, msg);
   }
 
-  if (action === "from" && state.step === "from-box" && state.draft.operation === "release") {
+  if (
+    action === "from" &&
+    state.step === "from-box" &&
+    state.draft.operation === "release"
+  ) {
     const source = (await listBoxes(env)).find((x) => idEq(x.id, args[0]));
     if (!source) return;
     state.draft.fromBox = source;
     state.maxAmount = await getBoxBalance(env, source.id);
     if (!(state.maxAmount > 0))
-      return editPanel(env, msg, `📦 «${esc(source.name)}» موجودی قابل انتقال ندارد.`, backHome());
+      return editPanel(
+        env,
+        msg,
+        `📦 «${esc(source.name)}» موجودی قابل انتقال ندارد.`,
+        backHome(),
+      );
     state.step = "to-account";
     await setState(env, chatId, state);
     return allocationChooseAccount(env, msg, "to-account");
   }
 
-  if (action === "account" && ["from-account", "to-account"].includes(state.step)) {
+  if (
+    action === "account" &&
+    ["from-account", "to-account"].includes(state.step)
+  ) {
     const account = (await listAccounts(env)).find((x) => idEq(x.id, args[0]));
     if (!account) return;
     if (state.step === "from-account") {
       state.draft.fromAccount = account;
       state.maxAmount = await getAccountBalance(env, account.id);
       if (!(state.maxAmount > 0))
-        return editPanel(env, msg, `🏦 «${esc(account.name)}» موجودی قابل انتقال ندارد.`, backHome());
+        return editPanel(
+          env,
+          msg,
+          `🏦 «${esc(account.name)}» موجودی قابل انتقال ندارد.`,
+          backHome(),
+        );
       state.step = "to-box";
       await setState(env, chatId, state);
       return allocationChooseBox(env, msg, "to", null, state.maxAmount);
@@ -1403,11 +1445,12 @@ async function handleAllocationCallback(env, msg, action, args) {
     );
   }
 
-  if (action === "to" && state.step === "to-box" && state.draft.operation === "assign") {
-    const target = (await listBoxes(env)).find(
-      (x) =>
-        idEq(x.id, args[0]),
-    );
+  if (
+    action === "to" &&
+    state.step === "to-box" &&
+    state.draft.operation === "assign"
+  ) {
+    const target = (await listBoxes(env)).find((x) => idEq(x.id, args[0]));
     if (!target) return;
     state.draft.toBox = target;
     state.step = "amount-unit";
@@ -1450,14 +1493,21 @@ async function handleAllocationCallback(env, msg, action, args) {
 
   if (action === "save") {
     const d = state.draft;
-    const complete = d.operation === "assign"
-      ? d.fromAccount && d.toBox
-      : d.fromBox && d.toAccount;
+    const complete =
+      d.operation === "assign"
+        ? d.fromAccount && d.toBox
+        : d.fromBox && d.toAccount;
     if (state.step !== "confirm" || !complete)
-      return editPanel(env, msg, "جزئیات تخصیص کامل نیست. عملیات را دوباره شروع کن.", backHome());
-    const available = d.operation === "assign"
-      ? await getAccountBalance(env, d.fromAccount.id)
-      : await getBoxBalance(env, d.fromBox.id);
+      return editPanel(
+        env,
+        msg,
+        "جزئیات تخصیص کامل نیست. عملیات را دوباره شروع کن.",
+        backHome(),
+      );
+    const available =
+      d.operation === "assign"
+        ? await getAccountBalance(env, d.fromAccount.id)
+        : await getBoxBalance(env, d.fromBox.id);
     if (available < state.draft.amount)
       return editPanel(
         env,
@@ -1470,7 +1520,10 @@ async function handleAllocationCallback(env, msg, action, args) {
     return editPanel(env, msg, "✅ انتقال بین حساب و باکس ثبت شد.", {
       inline_keyboard: [
         [btn("🎯 تخصیص جدید", "x:n:l")],
-        [btn("📋 سوابق تخصیص‌ها", "m:allocationhistory"), btn("🏠 منو", "m:home")],
+        [
+          btn("📋 سوابق تخصیص‌ها", "m:allocationhistory"),
+          btn("🏠 منو", "m:home"),
+        ],
       ],
     });
   }
@@ -1481,7 +1534,12 @@ async function allocationChooseBox(env, msg, role, exclude, available = null) {
     .filter((x) => !exclude || !idEq(x.id, exclude))
     .map((x) => btn(`📦 ${x.name}`, `al:${role}:${compactId(x.id)}`));
   if (!rows.length)
-    return editPanel(env, msg, "📦 برای این عملیات باکس دیگری در دسترس نیست.", backHome());
+    return editPanel(
+      env,
+      msg,
+      "📦 برای این عملیات باکس دیگری در دسترس نیست.",
+      backHome(),
+    );
   return editPanel(
     env,
     msg,
@@ -1502,7 +1560,12 @@ async function allocationChooseAccount(env, msg, role) {
     btn(`🏦 ${x.name}`, `al:account:${compactId(x.id)}`),
   );
   if (!rows.length)
-    return editPanel(env, msg, "🏦 حساب فعالی برای انتقال پیدا نشد.", backHome());
+    return editPanel(
+      env,
+      msg,
+      "🏦 حساب فعالی برای انتقال پیدا نشد.",
+      backHome(),
+    );
   return editPanel(
     env,
     msg,
@@ -1520,7 +1583,8 @@ async function allocationChooseAccount(env, msg, role) {
 
 function sendAllocationConfirm(env, chatId, state, msg = null) {
   const d = state.draft;
-  const fromLabel = d.operation === "assign" ? d.fromAccount.name : d.fromBox.name;
+  const fromLabel =
+    d.operation === "assign" ? d.fromAccount.name : d.fromBox.name;
   const toLabel = d.operation === "assign" ? d.toBox.name : d.toAccount.name;
   return panel(
     env,
@@ -1537,7 +1601,8 @@ function sendAllocationConfirm(env, chatId, state, msg = null) {
 }
 
 async function saveAllocation(env, d) {
-  const fromName = d.operation === "assign" ? d.fromAccount.name : d.fromBox.name;
+  const fromName =
+    d.operation === "assign" ? d.fromAccount.name : d.fromBox.name;
   const toName = d.operation === "assign" ? d.toBox.name : d.toAccount.name;
   const props = {
     [ALC.title]: titleProp(`${fromName} → ${toName}`),
@@ -1566,7 +1631,8 @@ async function saveAllocation(env, d) {
       [TX.date]: { date: { start: d.date } },
       [TX.status]: selectProp("ثبت‌شده"),
     };
-    if (d.operation === "assign") txProps[TX.fromAccount] = relationProp(d.fromAccount.id);
+    if (d.operation === "assign")
+      txProps[TX.fromAccount] = relationProp(d.fromAccount.id);
     else txProps[TX.toAccount] = relationProp(d.toAccount.id);
     await notion(env, "POST", "/pages", {
       parent: { database_id: dbId(env, "transactions") },
@@ -1588,7 +1654,12 @@ async function handleCrud(env, msg, action, args) {
 
   if (["l", "v", "e", "f", "d", "D", "n"].includes(action) && args[0] === "g") {
     await clearState(env, chatId);
-    return editPanel(env, msg, "⏸ بخش اهداف مالی فعلاً غیرفعال است.", backHome());
+    return editPanel(
+      env,
+      msg,
+      "⏸ بخش اهداف مالی فعلاً غیرفعال است.",
+      backHome(),
+    );
   }
 
   if (action === "ca") {
@@ -1597,7 +1668,13 @@ async function handleCrud(env, msg, action, args) {
   }
   if (action === "cs") {
     await clearState(env, chatId);
-    return listCategoryChildren(env, chatId, msg, args[0], Number(args[1]) || 0);
+    return listCategoryChildren(
+      env,
+      chatId,
+      msg,
+      args[0],
+      Number(args[1]) || 0,
+    );
   }
   if (action === "cp") {
     await clearState(env, chatId);
@@ -1700,6 +1777,8 @@ async function handleCrud(env, msg, action, args) {
       backHome(),
     );
   }
+  if (st.flow === "new" && st.assetFlow)
+    return handleAssetCreateCallback(env, msg, st, action, args);
   const schema = await getSchema(env, ENT[st.ent].key);
   const p = schema.props.find((x) => x.name === st.propName);
 
@@ -1708,21 +1787,16 @@ async function handleCrud(env, msg, action, args) {
     if (!st.moneyUnitFactor) return;
     st.step = "money-input";
     await setState(env, chatId, st);
-    await editPanel(
-      env,
-      msg,
-      amountReplyNotice(),
-      {
-        inline_keyboard: [
-          [
-            btn(
-              "❌ لغو",
-              st.flow === "new" ? "x:x" : `x:v:${st.ent}:${st.pageId}`,
-            ),
-          ],
+    await editPanel(env, msg, amountReplyNotice(), {
+      inline_keyboard: [
+        [
+          btn(
+            "❌ لغو",
+            st.flow === "new" ? "x:x" : `x:v:${st.ent}:${st.pageId}`,
+          ),
         ],
-      },
-    );
+      ],
+    });
     return sendScaledAmountPrompt(env, chatId, st.moneyUnitFactor);
   }
   if (action === "money-edit" && p && st.pendingMoney) {
@@ -1743,18 +1817,16 @@ async function handleCrud(env, msg, action, args) {
   if (action === "money-ok" && p && st.pendingMoney) {
     const amount = st.pendingMoney.number;
     delete st.pendingMoney;
-    return setFieldValue(
-      env,
-      chatId,
-      msg,
-      st,
-      { number: amount },
-      fmt(amount),
-    );
+    return setFieldValue(env, chatId, msg, st, { number: amount }, fmt(amount));
   }
   if (st.ent === "g") {
     await clearState(env, chatId);
-    return editPanel(env, msg, "⏸ بخش اهداف مالی فعلاً غیرفعال است.", backHome());
+    return editPanel(
+      env,
+      msg,
+      "⏸ بخش اهداف مالی فعلاً غیرفعال است.",
+      backHome(),
+    );
   }
 
   if (action === "o" && p) {
@@ -1881,10 +1953,7 @@ async function listCategoryRoots(env, chatId, msg, page = 0) {
   const rows = slice.map((root) => {
     const status = root.active ? "" : " (غیرفعال)";
     return [
-      btn(
-        `${root.icon} ${root.name}${status}`,
-        `x:ca:${compactId(root.id)}`,
-      ),
+      btn(`${root.icon} ${root.name}${status}`, `x:ca:${compactId(root.id)}`),
     ];
   });
   const nav = [];
@@ -1926,7 +1995,9 @@ async function listCategoryChildren(env, chatId, msg, rootId, page = 0) {
   const all = await listCategories(env, true);
   const root = all.find((x) => idEq(x.id, rootId));
   if (!root) return listCategoryRoots(env, chatId, msg, 0);
-  const children = all.filter((x) => x.parentIds.some((id) => idEq(id, root.id)));
+  const children = all.filter((x) =>
+    x.parentIds.some((id) => idEq(id, root.id)),
+  );
   const pages = Math.max(1, Math.ceil(children.length / PAGE_SIZE));
   page = Math.min(Math.max(0, page), pages - 1);
   const slice = children.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -1937,9 +2008,11 @@ async function listCategoryChildren(env, chatId, msg, rootId, page = 0) {
     ),
   ]);
   const nav = [];
-  if (page > 0) nav.push(btn("◀️ قبلی", `x:cp:${compactId(root.id)}:${page - 1}`));
+  if (page > 0)
+    nav.push(btn("◀️ قبلی", `x:cp:${compactId(root.id)}:${page - 1}`));
   if (pages > 1) nav.push(btn(`${fa(page + 1)}/${fa(pages)}`, "m:noop"));
-  if (page < pages - 1) nav.push(btn("بعدی ▶️", `x:cp:${compactId(root.id)}:${page + 1}`));
+  if (page < pages - 1)
+    nav.push(btn("بعدی ▶️", `x:cp:${compactId(root.id)}:${page + 1}`));
   if (nav.length) rows.push(nav);
   rows.push([btn("➕ دسته‌بندی جدید", "x:n:c")]);
   rows.push([btn("🔙 بازگشت به والد", `x:ca:${compactId(root.id)}`)]);
@@ -2254,7 +2327,316 @@ async function recomputeUnitPrice(env, pageId) {
   }
 }
 
+async function startNewAsset(env, chatId, msg) {
+  const schema = await getSchema(env, "assets");
+  const typeField = schema.props.find((p) => p.name === AST.type);
+  if (!typeField || !["select", "status"].includes(typeField.type))
+    return editPanel(
+      env,
+      msg,
+      `❌ فیلد «${esc(AST.type)}» در پایگاه‌داده دارایی‌ها برای انتخاب نوع آماده نیست.`,
+      backHome(),
+    );
+
+  const fields = {
+    title: schema.props.find((p) => p.name === AST.title),
+    type: typeField,
+    qty: schema.props.find((p) => p.name === AST.qty),
+    price: schema.props.find((p) => p.name === AST.price),
+    value: schema.props.find((p) => p.name === AST.value),
+    description: schema.props.find(
+      (p) => p.type === "rich_text" && /توضیح/.test(p.name),
+    ),
+    unit: schema.props.find((p) => p.name === AST.unit),
+    symbol: schema.props.find((p) => p.name === AST.symbol),
+    currency: schema.props.find((p) => p.name === AST.currency),
+    updatedAt: schema.props.find(
+      (p) => p.type === "date" && /بروزرسانی|به‌روزرسانی/.test(p.name),
+    ),
+    active: schema.props.find(
+      (p) => p.name === AST.active && p.type === "checkbox",
+    ),
+  };
+  if (!fields.title || !fields.qty || !fields.price || !fields.value)
+    return editPanel(
+      env,
+      msg,
+      "❌ فیلدهای عنوان، مقدار، قیمت فعلی و ارزش بازار در پایگاه‌داده دارایی‌ها کامل نیستند.",
+      backHome(),
+    );
+
+  const state = {
+    flow: "new",
+    ent: "s",
+    assetFlow: true,
+    assetStep: "title",
+    fields,
+    types: typeField.options || [],
+    asset: { date: todayTehran() },
+  };
+  await setState(env, chatId, state);
+  return send(
+    env,
+    chatId,
+    "💎 <b>ثبت دارایی جدید</b>\nابتدا عنوانی روشن برای دارایی وارد کن؛ مثلاً «دلار» یا «طلای ۱۸ عیار».",
+    { reply_markup: { force_reply: true, input_field_placeholder: "مثلاً دلار" } },
+  );
+}
+
+async function handleAssetCreateText(env, chatId, state, text) {
+  const asset = state.asset;
+  if (state.assetStep === "title") {
+    if (!text || text.length > 200)
+      return send(env, chatId, "عنوان دارایی باید بین ۱ تا ۲۰۰ نویسه باشد.");
+    asset.title = text;
+    state.assetStep = "description";
+    await setState(env, chatId, state);
+    return send(
+      env,
+      chatId,
+      "توضیحات دارایی را وارد کن؛ اگر توضیحی نداری «-» بفرست.",
+      { reply_markup: { force_reply: true, input_field_placeholder: "توضیحات اختیاری" } },
+    );
+  }
+  if (state.assetStep === "description") {
+    asset.description = text === "-" ? "" : text.slice(0, 2000);
+    state.assetStep = "type";
+    await setState(env, chatId, state);
+    return showAssetTypeChoices(env, chatId, null, state);
+  }
+  if (state.assetStep === "price") {
+    const price = parseAmountStrict(text);
+    if (!(price > 0))
+      return send(env, chatId, "قیمت فعلی هر واحد را به تومان وارد کن؛ مثلاً <code>۲۳۰ هزار</code>.");
+    asset.currentPrice = price;
+    state.assetStep = "quantity";
+    await setState(env, chatId, state);
+    return send(
+      env,
+      chatId,
+      `قیمت پایه‌ی هر واحد «${esc(asset.title)}» برابر <b>${fmt(price)} تومان</b> ثبت می‌شود.\nحالا مقدار دارایی را وارد کن؛ مثلاً <code>۶</code> گرم یا <code>۷</code> واحد.`,
+      { reply_markup: { force_reply: true, input_field_placeholder: "مثلاً ۷" } },
+    );
+  }
+  if (state.assetStep === "quantity") {
+    const qty = Number(toEnDigits(text).replace(/,/g, ""));
+    if (!(qty > 0) || !Number.isFinite(qty))
+      return send(env, chatId, "مقدار دارایی باید عددی بزرگ‌تر از صفر باشد؛ مثلاً <code>۰٫۵</code>.");
+    asset.qty = qty;
+    state.assetStep = "cost";
+    await setState(env, chatId, state);
+    return send(
+      env,
+      chatId,
+      "مبلغ نهایی خرید را به تومان وارد کن؛ این مبلغ به‌عنوان هزینه‌ی تراکنش ثبت و از باکس یا حساب انتخابی کسر می‌شود.",
+      { reply_markup: { force_reply: true, input_field_placeholder: "مثلاً ۱ میلیون و ۶۰۰ هزار" } },
+    );
+  }
+  if (state.assetStep === "cost") {
+    const cost = parseAmountStrict(text);
+    if (!(cost > 0))
+      return send(env, chatId, "مبلغ نهایی خرید باید بیشتر از صفر باشد؛ مثلاً <code>۱ میلیون و ۶۰۰ هزار</code>.");
+    asset.cost = cost;
+    state.assetStep = "box";
+    await setState(env, chatId, state);
+    return showAssetFundingChoices(env, chatId, null, state);
+  }
+  return send(env, chatId, "برای ادامه از دکمه‌های پیام استفاده کن یا /cancel را بزن.");
+}
+
+function showAssetTypeChoices(env, chatId, msg, state) {
+  const options = state.types;
+  if (!options.length)
+    return panel(env, chatId, msg, "نوع دارایی در تنظیمات دیتابیس گزینه‌ای ندارد.", backHome());
+  const rows = chunk(
+    options.map((name, index) => btn(name, `x:assettype:${index}`)),
+    2,
+  );
+  rows.push([btn("❌ لغو", "x:x")]);
+  return panel(env, chatId, msg, "نوع دارایی را انتخاب کن:", { inline_keyboard: rows });
+}
+
+async function showAssetFundingChoices(env, chatId, msg, state) {
+  const boxes = await listBoxes(env);
+  const rows = boxes.map((box) => [
+    btn(`📦 ${box.name}`, `x:assetbox:${compactId(box.id)}`),
+  ]);
+  rows.push([btn("🏦 پرداخت از حساب", "x:assetskipbox")]);
+  rows.push([btn("❌ لغو", "x:x")]);
+  return panel(
+    env,
+    chatId,
+    msg,
+    "منبع پرداخت مبلغ خرید را انتخاب کن. با انتخاب باکس، مبلغ فقط از همان باکس کم می‌شود؛ در غیر این صورت حساب را انتخاب می‌کنی.",
+    { inline_keyboard: rows },
+  );
+}
+
+async function showAssetAccountChoices(env, chatId, msg) {
+  const accounts = await listAccounts(env);
+  const rows = accounts.map((account) => [
+    btn(`🏦 ${account.name}`, `x:assetaccount:${compactId(account.id)}`),
+  ]);
+  rows.push([btn("❌ لغو", "x:x")]);
+  if (!accounts.length)
+    return panel(env, chatId, msg, "حساب فعالی برای ثبت هزینه‌ی خرید پیدا نشد.", backHome());
+  return panel(env, chatId, msg, "هزینه‌ی خرید از کدام حساب پرداخت شد؟", { inline_keyboard: rows });
+}
+
+async function handleAssetCreateCallback(env, msg, state, action, args) {
+  const chatId = msg.chat.id;
+  if (action === "assettype" && state.assetStep === "type") {
+    const type = state.types[Number(args[0])];
+    if (!type) return;
+    state.asset.type = type;
+    state.assetStep = "price";
+    await setState(env, chatId, state);
+    return send(
+      env,
+      chatId,
+      `قیمت فعلی هر واحد «${esc(state.asset.title)}» را به تومان وارد کن. این قیمت پایه‌ی ارزش روز دارایی است و با مبلغ نهایی خرید تفاوت دارد؛ مثلاً قیمت هر دلار <code>۲۳۰٬۰۰۰ تومان</code>.`,
+      { reply_markup: { force_reply: true, input_field_placeholder: "مثلاً ۲۳۰ هزار" } },
+    );
+  }
+  if (action === "assetbox" && state.assetStep === "box") {
+    const box = (await listBoxes(env)).find((x) => idEq(x.id, args[0]));
+    if (!box) return;
+    state.asset.box = box;
+    state.assetStep = "confirm";
+    await setState(env, chatId, state);
+    return sendAssetCreateConfirm(env, chatId, msg, state);
+  }
+  if (action === "assetskipbox" && state.assetStep === "box") {
+    state.assetStep = "account";
+    await setState(env, chatId, state);
+    return showAssetAccountChoices(env, chatId, msg);
+  }
+  if (action === "assetaccount" && state.assetStep === "account") {
+    const account = (await listAccounts(env)).find((x) => idEq(x.id, args[0]));
+    if (!account) return;
+    state.asset.account = account;
+    state.assetStep = "confirm";
+    await setState(env, chatId, state);
+    return sendAssetCreateConfirm(env, chatId, msg, state);
+  }
+  if (action === "assetsave" && state.assetStep === "confirm")
+    return saveNewAssetAndPurchase(env, chatId, msg, state);
+}
+
+function sendAssetCreateConfirm(env, chatId, msg, state) {
+  const a = state.asset;
+  const value = Math.round(a.currentPrice * a.qty);
+  const lines = [
+    "💎 <b>تأیید ثبت دارایی و خرید</b>",
+    "",
+    `عنوان: ${esc(a.title)}`,
+    a.description ? `توضیحات: ${esc(a.description)}` : null,
+    `نوع: ${esc(a.type)}`,
+    `قیمت فعلی هر واحد: <b>${fmt(a.currentPrice)} تومان</b>`,
+    `مقدار: <b>${fa(a.qty)}</b>`,
+    `ارزش روز دارایی: <b>${fmt(value)} تومان</b>`,
+    `هزینه‌ی نهایی خرید: <b>${fmt(a.cost)} تومان</b>`,
+    a.box ? `پرداخت از باکس: ${esc(a.box.name)}` : `پرداخت از حساب: ${esc(a.account?.name || "")}`,
+    `تاریخ دارایی و تراکنش: ${jalaliStr(a.date)}`,
+  ].filter(Boolean);
+  return panel(env, chatId, msg, lines.join("\n"), {
+    inline_keyboard: [
+      [btn("✅ ثبت دارایی و تراکنش خرید", "x:assetsave")],
+      [btn("❌ لغو", "x:x")],
+    ],
+  });
+}
+
+async function saveNewAssetAndPurchase(env, chatId, msg, state) {
+  const a = state.asset;
+  const fields = state.fields;
+  const typeField = fields.type;
+  const properties = {
+    [fields.title.name]: titleProp(a.title),
+    [fields.qty.name]: { number: a.qty },
+    [fields.price.name]: { number: a.currentPrice },
+  };
+  properties[AST.type] =
+    typeField.type === "status"
+      ? { status: { name: a.type } }
+      : selectProp(a.type);
+  if (fields.description && a.description)
+    properties[fields.description.name] = richTextProp(a.description);
+  if (fields.value?.type === "number")
+    properties[fields.value.name] = {
+      number: Math.round(a.currentPrice * a.qty),
+    };
+  if (fields.active) properties[AST.active] = { checkbox: true };
+  if (fields.updatedAt)
+    properties[fields.updatedAt.name] = { date: { start: a.date } };
+  if (fields.symbol?.type === "rich_text") {
+    const normalizedTitle = a.title.replace(/\s+/g, "");
+    const symbol = /دلار/.test(normalizedTitle)
+      ? "USD"
+      : /یورو/.test(normalizedTitle)
+        ? "EUR"
+        : /پوند/.test(normalizedTitle)
+          ? "GBP"
+          : /طلا/.test(normalizedTitle)
+            ? "XAU"
+            : null;
+    if (symbol) properties[fields.symbol.name] = richTextProp(symbol);
+  }
+  if (fields.currency?.type === "select") {
+    const currency = fields.currency.options?.includes(DEFAULT_CURRENCY)
+      ? DEFAULT_CURRENCY
+      : fields.currency.options?.includes("تومان")
+        ? "تومان"
+        : null;
+    if (currency) properties[fields.currency.name] = selectProp(currency);
+  }
+  if (fields.unit) {
+    const unit = /سکه/.test(a.title)
+      ? "عدد"
+      : /طلا/.test(a.title)
+        ? "گرم"
+        : "واحد";
+    if (fields.unit.type === "rich_text")
+      properties[fields.unit.name] = richTextProp(unit);
+    if (fields.unit.type === "select" && fields.unit.options?.includes(unit))
+      properties[fields.unit.name] = selectProp(unit);
+  }
+
+  const assetPage = await notion(env, "POST", "/pages", {
+    parent: { database_id: dbId(env, "assets") },
+    properties,
+  });
+  try {
+    const purchase = {
+      type: "خرید دارایی",
+      title: `خرید ${a.title}`,
+      amount: a.cost,
+      date: a.date,
+      asset: { id: assetPage.id, name: a.title },
+      assetQty: a.qty,
+      unitPrice: Math.round(a.cost / a.qty),
+      box: a.box,
+      fromAccount: a.account,
+      currency: DEFAULT_CURRENCY,
+    };
+    await saveTransaction(env, purchase);
+  } catch (error) {
+    try {
+      await notion(env, "PATCH", `/pages/${assetPage.id}`, { archived: true });
+    } catch {}
+    throw error;
+  }
+  await clearState(env, chatId);
+  return editPanel(env, msg, `✅ دارایی «${esc(a.title)}» و تراکنش خرید ${fmt(a.cost)} تومانی ثبت شد.`, {
+    inline_keyboard: [
+      [btn("💎 مشاهده دارایی‌ها", "m:assets")],
+      [btn("🏠 منوی اصلی", "m:home")],
+    ],
+  });
+}
+
 async function startNew(env, chatId, msg, e) {
+  if (e === "s") return startNewAsset(env, chatId, msg);
   const schema = await getSchema(env, ENT[e].key);
   const st = {
     flow: "new",
@@ -2452,7 +2834,10 @@ async function showMarketPrices(env, msg) {
     return editPanel(env, msg, marketPriceCache.text, {
       inline_keyboard: [
         [btn("🔄 بروزرسانی قیمت‌ها", "m:assetpricesrefresh")],
-        [btn("💎 بازگشت به دارایی‌ها", "m:assets"), btn("🏠 منوی اصلی", "m:home")],
+        [
+          btn("💎 بازگشت به دارایی‌ها", "m:assets"),
+          btn("🏠 منوی اصلی", "m:home"),
+        ],
       ],
     });
   } catch (error) {
@@ -2463,7 +2848,10 @@ async function showMarketPrices(env, msg) {
       {
         inline_keyboard: [
           [btn("🔄 تلاش دوباره", "m:assetpricesrefresh")],
-          [btn("💎 بازگشت به دارایی‌ها", "m:assets"), btn("🏠 منوی اصلی", "m:home")],
+          [
+            btn("💎 بازگشت به دارایی‌ها", "m:assets"),
+            btn("🏠 منوی اصلی", "m:home"),
+          ],
         ],
       },
     );
@@ -2504,9 +2892,11 @@ async function loadMarketPrices() {
       );
     }
     const body = await response.json();
-    if (body.success === false) throw new Error("سرویس قیمت دریافت نرخ را تأیید نکرد.");
+    if (body.success === false)
+      throw new Error("سرویس قیمت دریافت نرخ را تأیید نکرد.");
     const price = marketPriceValue(body);
-    if (!(price > 0)) throw new Error(`قیمت «${item.key}» در پاسخ سرویس پیدا نشد.`);
+    if (!(price > 0))
+      throw new Error(`قیمت «${item.key}» در پاسخ سرویس پیدا نشد.`);
     results.push({ ...item, price, updatedAt: marketPriceTimestamp(body) });
   }
 
@@ -2583,14 +2973,15 @@ function marketPricesUpdatedAt(results) {
 async function showOverview(env, msg) {
   const cm = currentJMonth();
   const prev = cm.m === 1 ? { y: cm.y - 1, m: 12 } : { y: cm.y, m: cm.m - 1 };
-  const [accounts, boxes, assets, thisMonth, lastMonth, categories] = await Promise.all([
-    queryDb(env, "accounts"),
-    queryDb(env, "boxes"),
-    queryDb(env, "assets"),
-    monthTransactions(env, cm.y, cm.m),
-    monthTransactions(env, prev.y, prev.m),
-    listCategories(env, true),
-  ]);
+  const [accounts, boxes, assets, thisMonth, lastMonth, categories] =
+    await Promise.all([
+      queryDb(env, "accounts"),
+      queryDb(env, "boxes"),
+      queryDb(env, "assets"),
+      monthTransactions(env, cm.y, cm.m),
+      monthTransactions(env, prev.y, prev.m),
+      listCategories(env, true),
+    ]);
 
   const sum = async (pages, name, activeName) => {
     const act = pages.filter((p) => propCheckbox(p, activeName) !== false);
@@ -2618,7 +3009,10 @@ async function showOverview(env, msg) {
     b = stat(lastMonth);
 
   const categoryNames = new Map(
-    categories.map((category) => [compactId(category.id), `${category.icon} ${category.name}`]),
+    categories.map((category) => [
+      compactId(category.id),
+      `${category.icon} ${category.name}`,
+    ]),
   );
   const expensesByCategory = new Map();
   for (const tx of thisMonth) {
@@ -2726,7 +3120,12 @@ async function handleReportCallback(env, msg, action, args) {
   if (action === "t") {
     const e = args[0];
     if (e === "g")
-      return editPanel(env, msg, "⏸ بخش اهداف مالی فعلاً غیرفعال است.", backHome());
+      return editPanel(
+        env,
+        msg,
+        "⏸ بخش اهداف مالی فعلاً غیرفعال است.",
+        backHome(),
+      );
     if (e !== "all" && !ENT[e]) return;
     const st = { flow: "report", ent: e, range: null, step: null };
     await setState(env, chatId, st);
@@ -2793,15 +3192,21 @@ function rangeMenu(env, chatId, msg, st) {
       ? "\n(بازه فقط روی جدول‌های تاریخ‌دار — تراکنش‌ها و تخصیص‌ها — اعمال می‌شود.)"
       : "";
   const title = st.ent === "all" ? "همه‌ی بخش‌ها" : ENT[st.ent].fa;
-  return panel(env, chatId, msg, `📅 <b>۲. بازه‌ی گزارش</b>\n${esc(title)}${note}\n\nبازه را انتخاب کن:`, {
-    inline_keyboard: [
-      [btn("📅 امروز", "r:g:today"), btn("🗓 این ماه", "r:g:thism")],
-      [btn("🗓 ماه قبل", "r:g:lastm"), btn("📆 انتخاب ماه", "r:g:pick")],
-      [btn("✍️ روز / بازه‌ی دلخواه", "r:g:custom")],
-      [btn("♾ همه‌ی زمان‌ها", "r:g:all")],
-      [btn("🏠 منو", "m:home")],
-    ],
-  });
+  return panel(
+    env,
+    chatId,
+    msg,
+    `📅 <b>۲. بازه‌ی گزارش</b>\n${esc(title)}${note}\n\nبازه را انتخاب کن:`,
+    {
+      inline_keyboard: [
+        [btn("📅 امروز", "r:g:today"), btn("🗓 این ماه", "r:g:thism")],
+        [btn("🗓 ماه قبل", "r:g:lastm"), btn("📆 انتخاب ماه", "r:g:pick")],
+        [btn("✍️ روز / بازه‌ی دلخواه", "r:g:custom")],
+        [btn("♾ همه‌ی زمان‌ها", "r:g:all")],
+        [btn("🏠 منو", "m:home")],
+      ],
+    },
+  );
 }
 
 function monthPicker(env, msg) {
@@ -3199,7 +3604,15 @@ const PDF_DETAIL_COLUMNS = {
   accounts: [ACC.title, ACC.balance, ACC.type],
   boxes: [BOX.title, BOX.balance],
   categories: [CAT.title, CAT.level, CAT.parent],
-  assets: [AST.title, AST.type, AST.symbol, AST.unit, AST.qty, AST.price, AST.value],
+  assets: [
+    AST.title,
+    AST.type,
+    AST.symbol,
+    AST.unit,
+    AST.qty,
+    AST.price,
+    AST.value,
+  ],
 };
 
 function preparePdfReport(report, ent, mode) {
@@ -3210,9 +3623,14 @@ function preparePdfReport(report, ent, mode) {
     .map((name, index) => ({
       name: name.trim(),
       index,
-      canonicalName: name.trim().replace(/\s*\(تومان\)\s*$/, "").trim(),
+      canonicalName: name
+        .trim()
+        .replace(/\s*\(تومان\)\s*$/, "")
+        .trim(),
     }))
-    .filter(({ canonicalName }) => mode !== "detail" || allowed.has(canonicalName));
+    .filter(
+      ({ canonicalName }) => mode !== "detail" || allowed.has(canonicalName),
+    );
   if (!kept.length) return report;
   const outputRows = [
     kept.map(({ name }) => name),
@@ -3684,7 +4102,9 @@ async function ensureAllocationAccountSchema(env) {
       property.type !== "relation" ||
       !idEq(property.relation?.database_id, accountDbId)
     ) {
-      throw new Error(`ستون «${name}» باید رابطه‌ای به پایگاه‌داده حساب‌ها باشد`);
+      throw new Error(
+        `ستون «${name}» باید رابطه‌ای به پایگاه‌داده حساب‌ها باشد`,
+      );
     }
   }
   if (Object.keys(missing).length) {
