@@ -21,6 +21,9 @@ const PAGE_SIZE = 10;
 const PICK_SIZE = 20;
 const MAX_EXPORT_ROWS = 5000;
 const UI_MESSAGE_LIMIT = 60;
+const MARKET_PRICE_CACHE_MS = 60 * 1000;
+const GOLD_MISKAL_TO_18K_GRAM = 4.3318;
+let marketPriceCache = { expiresAt: 0, text: null };
 
 const DB = {
   transactions: "NOTION_TRANSACTIONS_DB_ID",
@@ -499,6 +502,9 @@ async function handleMenu(env, msg, action) {
     categories: "c",
   };
   if (listMap[action]) return listEntity(env, chatId, msg, listMap[action], 0);
+  if (action === "assetpricesrefresh") marketPriceCache = { expiresAt: 0, text: null };
+  if (action === "assetprices" || action === "assetpricesrefresh")
+    return showMarketPrices(env, msg);
 
   if (action === "transactions")
     return editPanel(
@@ -1834,6 +1840,7 @@ async function listEntity(env, chatId, msg, e, page = 0) {
       btn("📈 خرید دارایی", "tx:type:خرید دارایی"),
       btn("📉 فروش دارایی", "tx:type:فروش دارایی"),
     ]);
+  if (e === "s") kb.push([btn("💱 قیمت ارز و طلا", "m:assetprices")]);
   kb.push([btn("🏠 منوی اصلی", "m:home")]);
 
   const text =
@@ -2392,6 +2399,131 @@ async function relNames(env, ids) {
 }
 
 /* ============================== Overview ============================== */
+
+async function showMarketPrices(env, msg) {
+  const chatId = msg.chat.id;
+  try {
+    if (!marketPriceCache.text || marketPriceCache.expiresAt <= Date.now()) {
+      marketPriceCache.text = await loadMarketPrices();
+      marketPriceCache.expiresAt = Date.now() + MARKET_PRICE_CACHE_MS;
+    }
+    return editPanel(env, msg, marketPriceCache.text, {
+      inline_keyboard: [
+        [btn("🔄 بروزرسانی قیمت‌ها", "m:assetpricesrefresh")],
+        [btn("💎 بازگشت به دارایی‌ها", "m:assets"), btn("🏠 منوی اصلی", "m:home")],
+      ],
+    });
+  } catch (error) {
+    return editPanel(
+      env,
+      msg,
+      `⚠️ دریافت قیمت‌ها از سرویس ناموفق بود.\n\n${esc(error.message)}\n\nلطفاً کمی بعد دوباره تلاش کن.`,
+      {
+        inline_keyboard: [
+          [btn("🔄 تلاش دوباره", "m:assetpricesrefresh")],
+          [btn("💎 بازگشت به دارایی‌ها", "m:assets"), btn("🏠 منوی اصلی", "m:home")],
+        ],
+      },
+    );
+  }
+}
+
+async function loadMarketPrices() {
+  const items = [
+    { key: "usd", label: "💵 دلار" },
+    { key: "gbp", label: "💷 پوند" },
+    { key: "euro", label: "💶 یورو" },
+    { key: "gold-miskal", label: "⚜️ مثقال طلا" },
+    { key: "coin-emami", label: "🟡 سکه امامی" },
+    { key: "coin-baharazadi", label: "🟠 سکه بهار آزادی" },
+    { key: "coin-baharazadi-nim", label: "🔸 نیم‌سکه" },
+    { key: "coin-baharazadi-rob", label: "🔹 ربع‌سکه" },
+    { key: "coin-gerami", label: "🟤 سکه گرمی" },
+  ];
+  const results = await Promise.all(
+    items.map(async (item) => {
+      const response = await fetch(
+        `https://api.priceto.day/v1/latest/irr/${encodeURIComponent(item.key)}`,
+        { headers: { Accept: "application/json" } },
+      );
+      if (!response.ok) throw new Error(`سرویس قیمت با کد ${response.status} پاسخ داد.`);
+      const body = await response.json();
+      if (body.success === false) throw new Error("سرویس قیمت دریافت نرخ را تأیید نکرد.");
+      const price = marketPriceValue(body);
+      if (!(price > 0)) throw new Error(`قیمت «${item.key}» در پاسخ سرویس پیدا نشد.`);
+      return { ...item, price, updatedAt: marketPriceTimestamp(body) };
+    }),
+  );
+
+  const byKey = new Map(results.map((item) => [item.key, item]));
+  const miskal = byKey.get("gold-miskal").price;
+  const gold18k = Math.round(miskal / GOLD_MISKAL_TO_18K_GRAM);
+  const lines = [
+    "📊 <b>نرخ لحظه‌ای ارز و طلا</b>",
+    "",
+    marketPriceLine(byKey.get("usd")),
+    marketPriceLine(byKey.get("gbp")),
+    marketPriceLine(byKey.get("euro")),
+    "",
+    "🪙 <b>طلا و سکه</b>",
+    `🥇 طلای ۱۸ عیار: <b>${fmt(gold18k)} تومان</b>`,
+    marketPriceLine(byKey.get("gold-miskal")),
+    marketPriceLine(byKey.get("coin-emami")),
+    marketPriceLine(byKey.get("coin-baharazadi")),
+    marketPriceLine(byKey.get("coin-baharazadi-nim")),
+    marketPriceLine(byKey.get("coin-baharazadi-rob")),
+    marketPriceLine(byKey.get("coin-gerami")),
+    "",
+    `🕒 آخرین بروزرسانی: ${marketPricesUpdatedAt(results)}`,
+    "📌 قیمت‌ها به تومان هستند.",
+  ];
+  return lines.join("\n");
+}
+
+function marketPriceLine(item) {
+  return `${item.label}: <b>${fmt(item.price)} تومان</b>`;
+}
+
+function marketPriceValue(payload) {
+  const candidates = [
+    payload?.price,
+    payload?.value,
+    payload?.rate,
+    payload?.result?.price,
+    payload?.result?.value,
+    payload?.result?.rate,
+    payload?.data?.price,
+    payload?.data?.value,
+    payload?.data?.rate,
+    payload?.data,
+  ];
+  for (const value of candidates) {
+    const number = typeof value === "number" ? value : Number(value);
+    if (Number.isFinite(number) && number > 0) return number;
+  }
+  return NaN;
+}
+
+function marketPriceTimestamp(payload) {
+  const value =
+    payload?.updated_at ??
+    payload?.updatedAt ??
+    payload?.timestamp ??
+    payload?.result?.updated_at ??
+    payload?.result?.updatedAt ??
+    payload?.result?.timestamp ??
+    payload?.data?.updated_at ??
+    payload?.data?.updatedAt ??
+    payload?.data?.timestamp;
+  const timestamp = value == null ? NaN : Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function marketPricesUpdatedAt(results) {
+  const latest = Math.max(0, ...results.map((item) => item.updatedAt || 0));
+  const parts = tehranParts(latest || Date.now());
+  return `${jalaliStr(parts.date)} - ${fa(parts.time)}`;
+}
 
 async function showOverview(env, msg) {
   const cm = currentJMonth();
