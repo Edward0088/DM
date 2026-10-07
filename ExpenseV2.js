@@ -72,6 +72,8 @@ const BOX = {
   balance: "مانده",
   active: "فعال",
   system: "سیستمی",
+  incoming: "ورودی",
+  outgoing: "خروجی",
 };
 const AST = {
   title: "دارایی",
@@ -1534,6 +1536,7 @@ async function saveAllocation(env, d) {
     props[ALC.fromBox] = relationProp(d.fromBox.id);
     props[ALC.toAccount] = relationProp(d.toAccount.id);
   }
+  // Notion syncs the box's reciprocal «ورودی» / «خروجی» relation fields.
   const allocation = await notion(env, "POST", "/pages", {
     parent: { database_id: dbId(env, "allocations") },
     properties: props,
@@ -3480,7 +3483,11 @@ const relationProp = (id) => ({ relation: [{ id }] });
 function isHiddenField(e, p) {
   const name = String(p.name || "").trim();
   if (p.type === "unique_id") return true;
-  if (e === "b" && name === BOX.system) return true;
+  if (
+    e === "b" &&
+    [BOX.system, BOX.incoming, BOX.outgoing].includes(name)
+  )
+    return true;
   if ([TX.currency, TX.chartGroup, ACC.currency, AST.currency].includes(name))
     return true;
   if (/^(?:id|شناسه|شناسه‌ی|شناسه ی)(?:\s|$)/i.test(name)) return true;
