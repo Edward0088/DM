@@ -339,6 +339,17 @@ async function handleUpdate(update, env) {
 /* ============================== Text ============================== */
 
 async function handleText(msg, env) {
+  try {
+    return await handleTextMessage(msg, env);
+  } finally {
+    await tg(env, "deleteMessage", {
+      chat_id: msg.chat.id,
+      message_id: msg.message_id,
+    }).catch(() => {});
+  }
+}
+
+async function handleTextMessage(msg, env) {
   const chatId = msg.chat.id;
   const text = msg.text.trim();
   const cmd = text.startsWith("/") ? text.split(/[\s@]/)[0] : null;
@@ -369,24 +380,37 @@ async function handleText(msg, env) {
   }
 
   const state = await getState(env, chatId);
-  await clearActiveMenus(env, chatId, null, {
-    deleteMenus: !state || acceptsTextInput(state),
-  }).catch(() => {});
+  if (state && acceptsTextInput(state)) {
+    await cleanupMessages(env, chatId, msg.message_id).catch(() => {});
+  } else {
+    await clearActiveMenus(env, chatId, null, { deleteMenus: !state }).catch(
+      () => {},
+    );
+  }
   if (!state) return sendMainMenu(env, chatId, "از منوی زیر انتخاب کن 👇");
 
   if (state.flow === "new" && state.assetFlow)
     return handleAssetCreateText(env, chatId, state, text);
+  if (state.flow === "asset-sale")
+    return handleAssetSaleText(env, chatId, state, text);
 
   // ---- ثبت تراکنش ----
   if (state.flow === "tx" && state.step === "title") {
     if (!text || text.length > 200) {
-      return send(env, chatId, "❌ عنوان باید بین ۱ تا ۲۰۰ نویسه باشد.");
+      return send(env, chatId, "❌ عنوان تراکنش را بین ۱ تا ۲۰۰ نویسه وارد کن؛ مثلاً «خرید هفتگی» یا «حقوق مهرماه».");
     }
     state.draft.title = text;
     state.draft.date = todayTehran();
     state.step = "amount-choice";
     await setState(env, chatId, state);
     return askTxAmount(env, chatId, state);
+  }
+
+  if (state.flow === "tx" && state.step === "description-input") {
+    state.draft.desc = text.slice(0, 2000);
+    state.descriptionDone = true;
+    await setState(env, chatId, state);
+    return continueTxFlow(env, chatId, state);
   }
 
   if (state.flow === "tx" && state.step === "amount-input") {
@@ -519,9 +543,11 @@ async function handleText(msg, env) {
 
 function acceptsTextInput(state) {
   if (state.flow === "tx")
-    return ["title", "amount-input", "amount", "assetQty"].includes(
+    return ["title", "amount-input", "amount", "assetQty", "description-input"].includes(
       state.step,
     );
+  if (state.flow === "asset-sale")
+    return ["quantity", "base-price", "proceeds"].includes(state.step);
   if (state.flow === "new" && state.assetFlow)
     return ["title", "description", "price-input", "quantity", "cost-input"].includes(
       state.assetStep,
@@ -556,6 +582,7 @@ async function handleCallback(cq, env) {
   }).catch(() => {});
   if (ns === "m") return handleMenu(env, msg, action);
   if (ns === "tx") return handleTxCallback(env, msg, action, args);
+  if (ns === "as") return handleAssetSaleCallback(env, msg, action, args);
   if (ns === "al") return handleAllocationCallback(env, msg, action, args);
   if (ns === "x") return handleCrud(env, msg, action, args);
   if (ns === "r") return handleReportCallback(env, msg, action, args);
@@ -617,7 +644,7 @@ async function handleMenu(env, msg, action) {
     return editPanel(
       env,
       msg,
-      "➕ <b>ثبت تراکنش جدید</b>\nنوع تراکنش را انتخاب کن:",
+      "➕ <b>ثبت تراکنش جدید</b>\nنوع را انتخاب کن: درآمد به حساب یا باکس اضافه می‌شود، هزینه از مبدأ پرداخت کم می‌شود و انتقال، پول را از یک حساب به حساب دیگر جابه‌جا می‌کند.",
       txTypeKeyboard(),
     );
   }
@@ -630,10 +657,9 @@ async function handleMenu(env, msg, action) {
 
 function mainMenuText(extra = "") {
   return (
-    `${extra ? esc(extra) + "\n\n" : ""}💳 <b>پلتفرم مدیریت مالی</b>\n\n` +
-    `<b>همه‌چیز درباره پولت، یکجا.</b>\n\n` +
-    `سلام 👋\n` +
-    `من دستیار مالی تو هستم؛ برای ثبت، مدیریت و تحلیل جریان پول و دارایی‌هات.`
+    `${extra ? esc(extra) + "\n\n" : ""}💳 <b>مدیریت مالی شخصی</b>\n\n` +
+    `تراکنش ها، حساب‌ها، باکس‌ها و دارایی‌هایت را یک‌جا مدیریت کن.\n\n` +
+    `برای شروع، یکی از گزینه‌های منو را انتخاب کن 👇`
   );
 }
 
@@ -709,10 +735,6 @@ function txTypeKeyboard() {
     inline_keyboard: [
       [btn("💸 هزینه", "tx:type:هزینه"), btn("💰 درآمد", "tx:type:درآمد")],
       [btn("🔁 انتقال", "tx:type:انتقال")],
-      [
-        btn("📈 خرید دارایی", "tx:type:خرید دارایی"),
-        btn("📉 فروش دارایی", "tx:type:فروش دارایی"),
-      ],
       [btn("🏠 بازگشت", "m:home")],
     ],
   };
@@ -735,7 +757,7 @@ function amountReplyNotice() {
 }
 
 function scaledAmountError(factor) {
-  return `❌ فقط عدد را وارد کن؛ مثلاً <code>${factor === 1_000_000 ? "۳۲" : "۵۰۰"}</code>.`;
+  return `❌ یک عددِ مثبت و بدون واحد وارد کن. عدد باید بر اساس واحد انتخابی (${factor === 1_000_000 ? "میلیون" : "هزار"} تومان) باشد؛ مثلاً <code>${factor === 1_000_000 ? "۳۲" : "۵۰۰"}</code>.`;
 }
 
 async function showMoneyUnitChoice(
@@ -791,7 +813,7 @@ function sendAmountReview(env, chatId, amount, confirmAction, editAction) {
   return send(
     env,
     chatId,
-    `💰 <b>مبلغ شما:</b>\n\n<b>${fmt(amount)} تومان</b>`,
+    `💰 <b>مبلغ واردشده</b>\n\n<b>${fmt(amount)} تومان</b>\n\nاگر مبلغ درست است تأیید کن تا به مرحله‌ی بعد بروی؛ برای ورود دوباره، اصلاح را بزن.`,
     {
       reply_markup: {
         inline_keyboard: [
@@ -820,10 +842,15 @@ async function handleTxCallback(env, msg, action, args) {
     await editPanel(
       env,
       msg,
-      `${TYPE_META[type].icon} <b>${esc(type)} انتخاب شد.</b>`,
+      `${TYPE_META[type].icon} <b>ثبت ${esc(type)}</b>\n\nدر چند مرحله عنوان، مبلغ و جزئیات این تراکنش را می‌گیریم. هرجا لازم باشد می‌توانی آن مرحله را رد یا عملیات را لغو کنی.`,
       { inline_keyboard: [[btn("❌ لغو", "tx:cancel")]] },
     );
-    return send(env, chatId, `📝 عنوان ${esc(type)} را وارد کن.`, {
+    const example = type === "درآمد"
+      ? "حقوق مهرماه"
+      : type === "انتقال"
+        ? "انتقال به حساب پس‌انداز"
+        : "خرید هفتگی";
+    return send(env, chatId, `📝 یک عنوان کوتاه برای ${esc(type)} وارد کن؛ این عنوان بعداً در سوابق و گزارش‌ها دیده می‌شود.\nمثلاً: <code>${example}</code>`, {
       reply_markup: {
         force_reply: true,
         input_field_placeholder: "مثلاً خرید روزانه",
@@ -849,6 +876,13 @@ async function handleTxCallback(env, msg, action, args) {
       "این عملیات منقضی شده. از منوی اصلی دوباره شروع کن.",
       backHome(),
     );
+  }
+
+  if (action === "desc-skip" && state.step === "description-input") {
+    state.draft.desc = "";
+    state.descriptionDone = true;
+    await setState(env, chatId, state);
+    return continueTxFlow(env, chatId, state, msg);
   }
 
   if (action === "amount") {
@@ -948,7 +982,16 @@ async function handleTxCallback(env, msg, action, args) {
       msg,
       Number(args[0]) || 0,
       args[1] === "1",
+      args[2] && args[2] !== "-" ? args[2] : null,
     );
+  }
+
+  if (action === "catgroups") {
+    return chooseCategoryGroups(env, chatId, msg, args[0] === "1");
+  }
+
+  if (action === "catgroup") {
+    return chooseCategoryRoot(env, chatId, msg, 0, args[1] === "1", args[0]);
   }
 
   if (action === "subpg") {
@@ -959,11 +1002,13 @@ async function handleTxCallback(env, msg, action, args) {
       args[0],
       Number(args[1]) || 0,
       args[2] === "1",
+      args[3] && args[3] !== "-" ? args[3] : null,
     );
   }
 
   if (action === "catroot") {
-    const x = (await listCategories(env)).find((c) => idEq(c.id, args[0]));
+    const categories = await transactionCategories(env, state);
+    const x = categories.find((c) => idEq(c.id, args[0]));
     if (!x) return;
     state.draft.categoryRoot = x;
     await setState(env, chatId, state);
@@ -974,11 +1019,13 @@ async function handleTxCallback(env, msg, action, args) {
       compactId(x.id),
       0,
       args[1] === "1",
+      args[2] || null,
     );
   }
 
   if (action === "catmain" || action === "cat") {
-    const x = (await listCategories(env)).find((c) => idEq(c.id, args[0]));
+    const categories = await transactionCategories(env, state);
+    const x = categories.find((c) => idEq(c.id, args[0]));
     if (!x) return;
     state.draft.category = x;
     delete state.draft.categoryRoot;
@@ -1015,7 +1062,7 @@ async function handleTxCallback(env, msg, action, args) {
     return editPanel(
       env,
       msg,
-      `✅ <b>تراکنش با موفقیت ثبت شد</b>\n💵 مبلغ: <b>${fmt(state.draft.amount)} تومان</b>`,
+      `✅ <b>تراکنش ثبت شد</b>\n${esc(state.draft.title)}\nنوع: ${esc(state.draft.type)}\nمبلغ: <b>${fmt(state.draft.amount)} تومان</b>`,
       {
         inline_keyboard: [
           [btn("➕ تراکنش جدید", "m:new")],
@@ -1027,21 +1074,13 @@ async function handleTxCallback(env, msg, action, args) {
 }
 
 function askTxAmount(env, chatId, state) {
-  const rows = [
-    [btn("۵۰ هزار", "tx:amount:50000"), btn("۱۰۰ هزار", "tx:amount:100000")],
-    [btn("۲۵۰ هزار", "tx:amount:250000"), btn("۵۰۰ هزار", "tx:amount:500000")],
-    [
-      btn("۱ میلیون", "tx:amount:1000000"),
-      btn("۲ میلیون", "tx:amount:2000000"),
-    ],
-    [btn("✍️ مبلغ دلخواه", "tx:custom")],
-    [btn("❌ لغو", "tx:cancel")],
-  ];
-  return send(
+  return showMoneyUnitChoice(
     env,
     chatId,
-    `💵 <b>مبلغ «${esc(state.draft.title)}»</b>\nیک مبلغ پیشنهادی را بزن یا مبلغ دلخواه را وارد کن.`,
-    { reply_markup: { inline_keyboard: rows } },
+    null,
+    "tx",
+    "tx:cancel",
+    `💵 <b>مبلغ تراکنش «${esc(state.draft.title)}»</b>\nواحدی را انتخاب کن که می‌خواهی مبلغ را با آن وارد کنی. در مرحله‌ی بعد عدد را می‌فرستی؛ مثلاً ۵۰۰ با واحد هزار یعنی ۵۰۰ هزار تومان.`,
   );
 }
 
@@ -1049,7 +1088,7 @@ async function continueTxFlow(env, chatId, state, msg = null) {
   const d = state.draft;
   const meta = TYPE_META[d.type];
 
-  if (d.type === "درآمد" && !d.box) {
+  if (d.type === "درآمد" && !d.box && !d.skipBox) {
     const unallocated = await getUnallocatedBox(env);
     if (unallocated) d.box = unallocated;
   }
@@ -1073,6 +1112,17 @@ async function continueTxFlow(env, chatId, state, msg = null) {
   }
 
   if (!(await ensureTransactionFunds(env, chatId, state, msg))) return;
+
+  if (d.accountCharge && !state.descriptionDone) {
+    state.step = "description-input";
+    await setState(env, chatId, state);
+    return panel(env, chatId, msg, "📝 توضیحی برای این شارژ بنویس تا بعداً در سوابق تراکنش قابل‌تشخیص باشد. اگر توضیحی نداری، رد کردن را بزن.", {
+      inline_keyboard: [
+        [btn("⏭ رد کردن توضیحات", "tx:desc-skip")],
+        [btn("❌ لغو", "tx:cancel")],
+      ],
+    });
+  }
 
   if (meta.needsBox && !d.box) return choose(env, chatId, msg, "box");
   if (meta.needsCategory && !d.category)
@@ -1119,7 +1169,7 @@ async function ensureTransactionFunds(env, chatId, state, msg = null) {
     env,
     chatId,
     msg,
-    `❌ موجودی ${sourceName} کافی نیست.\nمبلغ تراکنش: <b>${fmt(d.amount)} تومان</b>\nموجودی فعلی: <b>${fmt(balance)} تومان</b>\n\nحساب یا باکس را شارژ کن، یا مبلغ/منبع پرداخت را تغییر بده.`,
+    `❌ موجودی ${sourceName} برای این پرداخت کافی نیست؛ تراکنش هنوز ثبت نشده است.\nمبلغ تراکنش: <b>${fmt(d.amount)} تومان</b>\nموجودی فعلی: <b>${fmt(balance)} تومان</b>\n\nحساب یا باکس را شارژ کن، یا مبلغ/منبع پرداخت را تغییر بده.`,
     {
       inline_keyboard: [
         [btn("✏️ تغییر مبلغ", "tx:amount-edit")],
@@ -1145,14 +1195,14 @@ async function choose(
       icon: "🏦",
       text:
         role === "to"
-          ? "🏦 حساب مقصد را انتخاب کن:"
-          : "🏦 حساب مبدأ را انتخاب کن:",
+          ? "🏦 حسابی را انتخاب کن که مبلغ به آن اضافه می‌شود؛ این حساب مقصد تراکنش است."
+          : "🏦 حسابی را انتخاب کن که مبلغ از آن پرداخت می‌شود؛ موجودی این حساب کاهش پیدا می‌کند.",
       cb: (id) => `tx:acc:${role}:${id}`,
     },
     box: {
       list: async () => await listBoxes(env),
       icon: "📦",
-      text: "📦 باکس مربوط به این تراکنش را انتخاب کن:",
+      text: "📦 اگر مبلغ این تراکنش از یک باکس پرداخت می‌شود یا باید به باکسی اضافه شود، آن باکس را انتخاب کن. در غیر این صورت «رد کردن این مرحله» را بزن تا از حساب استفاده شود.",
       cb: (id) => `tx:box:${id}`,
     },
     ast: {
@@ -1194,12 +1244,15 @@ async function chooseCategoryRoot(
   msg,
   page = 0,
   optional = false,
+  group = null,
 ) {
-  const all = await listCategories(env);
+  const all = await transactionCategories(env, await getState(env, chatId));
+  if (!group) return chooseCategoryGroups(env, chatId, msg, optional);
   const explicitRoots = all.filter((x) => x.level === "کلی");
-  const roots = explicitRoots.length
+  const allRoots = explicitRoots.length
     ? explicitRoots
     : all.filter((x) => !x.parentIds.length);
+  const roots = allRoots.filter((root) => categoryRootBelongsToGroup(root, all, group));
   const pages = Math.max(1, Math.ceil(roots.length / PICK_SIZE));
   page = Math.min(Math.max(0, page), pages - 1);
   const slice = roots.slice(page * PICK_SIZE, (page + 1) * PICK_SIZE);
@@ -1207,7 +1260,7 @@ async function chooseCategoryRoot(
     slice.map((x) =>
       btn(
         `${x.icon} ${x.name}`,
-        `tx:catroot:${compactId(x.id)}:${optional ? "1" : "0"}`,
+        `tx:catroot:${compactId(x.id)}:${optional ? "1" : "0"}:${group}`,
       ),
     ),
     2,
@@ -1216,18 +1269,41 @@ async function chooseCategoryRoot(
   if (pages > 1) {
     const nav = [];
     if (page > 0)
-      nav.push(btn("◀️ قبلی", `tx:catpg:${page - 1}:${optional ? "1" : "0"}`));
+      nav.push(btn("◀️ قبلی", `tx:catpg:${page - 1}:${optional ? "1" : "0"}:${group}`));
     nav.push(btn(`${fa(page + 1)}/${fa(pages)}`, "m:noop"));
     if (page < pages - 1)
-      nav.push(btn("بعدی ▶️", `tx:catpg:${page + 1}:${optional ? "1" : "0"}`));
+      nav.push(btn("بعدی ▶️", `tx:catpg:${page + 1}:${optional ? "1" : "0"}:${group}`));
     rows.push(nav);
   }
-  if (optional) rows.push([btn("⏭ بدون دسته‌بندی", "tx:skip:cat")]);
+  if (optional) rows.push([btn("⏭ ثبت بدون دسته‌بندی", "tx:skip:cat")]);
+  rows.push([btn("🔙 انتخاب گروه", `tx:catgroups:${optional ? "1" : "0"}`)]);
   rows.push([btn("❌ لغو", "tx:cancel")]);
   const text = roots.length
-    ? "🏷 <b>دسته‌بندی کلی</b>\nابتدا دسته‌ی اصلی تراکنش را انتخاب کن:"
-    : "⚠️ دسته‌بندی کلی فعالی پیدا نشد.";
+    ? `🏷 <b>دسته‌بندی‌های ${categoryBrowseGroupLabel(group)}</b>\nدسته‌ی کلی را انتخاب کن. بعد می‌توانی یک زیردسته را بزنی یا با همان دسته‌ی کلی ادامه بدهی:`
+    : "⚠️ در این گروه دسته‌ی کلی پیدا نشد.";
   return panel(env, chatId, msg, text, { inline_keyboard: rows });
+}
+
+async function chooseCategoryGroups(env, chatId, msg, optional = false) {
+  const all = await transactionCategories(env, await getState(env, chatId));
+  const explicitRoots = all.filter((x) => x.level === "کلی");
+  const roots = explicitRoots.length
+    ? explicitRoots
+    : all.filter((x) => !x.parentIds.length);
+  const groups = categoryBrowseGroups(all, roots);
+  const rows = chunk(
+    groups.map((group) =>
+      btn(categoryBrowseGroupLabel(group), `tx:catgroup:${group}:${optional ? "1" : "0"}`),
+    ),
+    2,
+  );
+  if (optional) rows.push([btn("⏭ ثبت بدون دسته‌بندی", "tx:skip:cat")]);
+  rows.push([btn("❌ لغو", "tx:cancel")]);
+  return panel(env, chatId, msg,
+    groups.length
+      ? "🏷 <b>انتخاب گروه دسته‌بندی</b>\nگروهی را انتخاب کن که این تراکنش به آن مربوط است؛ بعد دسته‌ی کلی و در صورت نیاز زیردسته را مشخص می‌کنی."
+      : "⚠️ دسته‌بندی فعالی پیدا نشد.",
+    { inline_keyboard: rows });
 }
 
 async function chooseCategoryChild(
@@ -1237,21 +1313,15 @@ async function chooseCategoryChild(
   rootId,
   page = 0,
   optional = false,
+  group = null,
 ) {
-  const all = await listCategories(env);
+  const all = await transactionCategories(env, await getState(env, chatId));
   const root = all.find((x) => idEq(x.id, rootId));
-  if (!root) return chooseCategoryRoot(env, chatId, msg, 0, optional);
+  if (!root) return chooseCategoryRoot(env, chatId, msg, 0, optional, group);
   const children = all.filter((x) =>
-    x.parentIds.some((id) => idEq(id, root.id)),
+    x.parentIds.some((id) => idEq(id, root.id)) &&
+    (!group || categoryChildBelongsToGroup(x, root, group)),
   );
-  if (!children.length) {
-    const state = await getState(env, chatId);
-    if (!state || state.flow !== "tx") return;
-    state.draft.category = root;
-    delete state.draft.categoryRoot;
-    await setState(env, chatId, state);
-    return continueTxFlow(env, chatId, state, msg);
-  }
 
   const pages = Math.max(1, Math.ceil(children.length / PICK_SIZE));
   page = Math.min(Math.max(0, page), pages - 1);
@@ -1276,7 +1346,7 @@ async function chooseCategoryChild(
       nav.push(
         btn(
           "◀️ قبلی",
-          `tx:subpg:${compactId(root.id)}:${page - 1}:${optional ? "1" : "0"}`,
+          `tx:subpg:${compactId(root.id)}:${page - 1}:${optional ? "1" : "0"}:${group || "-"}`,
         ),
       );
     nav.push(btn(`${fa(page + 1)}/${fa(pages)}`, "m:noop"));
@@ -1284,19 +1354,22 @@ async function chooseCategoryChild(
       nav.push(
         btn(
           "بعدی ▶️",
-          `tx:subpg:${compactId(root.id)}:${page + 1}:${optional ? "1" : "0"}`,
+          `tx:subpg:${compactId(root.id)}:${page + 1}:${optional ? "1" : "0"}:${group || "-"}`,
         ),
       );
     rows.push(nav);
   }
-  if (optional) rows.push([btn("⏭ بدون دسته‌بندی", "tx:skip:cat")]);
-  rows.push([btn("🔙 دسته‌های کلی", `tx:catpg:0:${optional ? "1" : "0"}`)]);
+  if (optional) rows.push([btn("⏭ ثبت بدون دسته‌بندی", "tx:skip:cat")]);
+  rows.push([btn("🔙 دسته‌های کلی", `tx:catpg:0:${optional ? "1" : "0"}:${group || "-"}`)]);
+  rows.push([btn("🔙 انتخاب گروه", `tx:catgroups:${optional ? "1" : "0"}`)]);
   rows.push([btn("❌ لغو", "tx:cancel")]);
   return panel(
     env,
     chatId,
     msg,
-    `${esc(root.icon)} <b>${esc(root.name)}</b>\nیک زیر‌دسته را انتخاب کن؛ یا تراکنش را با همین دسته‌ی کلی ثبت کن:`,
+    children.length
+      ? `${esc(root.icon)} <b>${esc(root.name)}</b>\nیک زیر‌دسته را انتخاب کن یا ادامه را با همین دسته‌بندی بزن:`
+      : `${esc(root.icon)} <b>${esc(root.name)}</b>\nاین دسته زیر‌دسته‌ای ندارد؛ می‌توانی با همین دسته‌بندی ادامه بدهی.`,
     { inline_keyboard: rows },
   );
 }
@@ -1305,7 +1378,9 @@ async function sendTxConfirm(env, chatId, state, msg = null) {
   const d = state.draft;
   const boxReplacesAccount = Boolean(d.box && TYPE_META[d.type].optionalBox);
   const lines = [
-    `${TYPE_META[d.type].icon} <b>تأیید تراکنش</b>`,
+    `${TYPE_META[d.type].icon} <b>مرور و ثبت تراکنش</b>`,
+    "",
+    "عنوان، مبلغ، مبدأ یا مقصد و دسته‌بندی را بررسی کن. با زدن «ثبت»، تراکنش در سوابق مالی ذخیره می‌شود؛ دکمه‌های تاریخ هم روز ثبت را تغییر می‌دهند.",
     "",
     `نوع: ${esc(d.type)}`,
     `عنوان: ${esc(d.title)}`,
@@ -1318,7 +1393,7 @@ async function sendTxConfirm(env, chatId, state, msg = null) {
       : null,
     d.box ? `باکس: ${esc(d.box.name)}` : null,
     d.category
-      ? `دسته‌بندی: ${esc(d.category.icon || "🏷")} ${esc(d.category.name)}`
+      ? `دسته‌بندی: ${d.category.icon ? `${esc(d.category.icon)} ` : ""}${esc(d.category.name)}`
       : null,
     d.asset ? `دارایی: ${esc(d.asset.name)} (${fa(d.assetQty)})` : null,
     d.unitPrice ? `قیمت واحد: ${fmt(d.unitPrice)} تومان` : null,
@@ -1754,7 +1829,11 @@ async function handleCrud(env, msg, action, args) {
 
   if (action === "ca") {
     await clearState(env, chatId);
-    return showCategoryRoot(env, chatId, msg, args[0]);
+    return listCategoryChildren(env, chatId, msg, args[0], 0, args[1] || null);
+  }
+  if (action === "cg") {
+    await clearState(env, chatId);
+    return listCategoryRoots(env, chatId, msg, 0, args[0]);
   }
   if (action === "cs") {
     await clearState(env, chatId);
@@ -1764,18 +1843,20 @@ async function handleCrud(env, msg, action, args) {
       msg,
       args[0],
       Number(args[1]) || 0,
+      args[2] || null,
     );
   }
   if (action === "cp") {
     await clearState(env, chatId);
     const parentId = args[0] === "-" ? null : args[0];
     const page = Number(args[1]) || 0;
+    const group = args[2] || null;
     return parentId
-      ? listCategoryChildren(env, chatId, msg, parentId, page)
-      : listCategoryRoots(env, chatId, msg, page);
+      ? listCategoryChildren(env, chatId, msg, parentId, page, group)
+      : listCategoryRoots(env, chatId, msg, page, group);
   }
 
-  if (["l", "v", "e", "d", "D", "n", "x"].includes(action))
+  if (["l", "v", "e", "d", "D", "n", "x", "charge"].includes(action))
     await clearState(env, chatId);
 
   if (action === "x") {
@@ -1791,25 +1872,60 @@ async function handleCrud(env, msg, action, args) {
     return listEntity(env, chatId, msg, args[0], Number(args[1]) || 0);
   if (action === "v") return showItem(env, chatId, msg, args[0], args[1]);
 
+  if (action === "charge") {
+    const account = (await listAccounts(env)).find((x) => idEq(x.id, args[0]));
+    if (!account) return listEntity(env, chatId, msg, "a", 0);
+    await setState(env, chatId, {
+      flow: "tx",
+      step: "title",
+      draft: {
+        type: "درآمد",
+        status: "ثبت‌شده",
+        currency: DEFAULT_CURRENCY,
+        toAccount: account,
+        skipBox: true,
+        accountCharge: true,
+      },
+    });
+    await editPanel(env, msg, `💰 شارژ حساب «${esc(account.name)}»`, {
+      inline_keyboard: [[btn("❌ لغو", "tx:cancel")]],
+    });
+    return send(env, chatId, `📝 عنوان این درآمد را وارد کن؛ این تراکنش مستقیماً به حساب «${esc(account.name)}» اضافه می‌شود و عنوانش در سوابق حساب دیده خواهد شد.\nمثلاً: <code>حقوق مهرماه</code>`, {
+      reply_markup: { force_reply: true, input_field_placeholder: "مثلاً واریز حقوق" },
+    });
+  }
+
   if (action === "n") {
     const e = args[0];
     if (e === "t")
       return editPanel(
         env,
         msg,
-        "➕ <b>ثبت تراکنش جدید</b>\nنوع تراکنش را انتخاب کن:",
+        "➕ <b>ثبت تراکنش جدید</b>\nنوع را انتخاب کن: درآمد به حساب یا باکس اضافه می‌شود، هزینه از مبدأ پرداخت کم می‌شود و انتقال، پول را از یک حساب به حساب دیگر جابه‌جا می‌کند.",
         txTypeKeyboard(),
       );
     if (e === "l") return startAllocation(env, msg);
+    if (e === "s") return listEntity(env, chatId, msg, "s", 0);
+    if (e === "c") return startNewCategory(env, chatId, msg, args[1], args[2]);
     return startNew(env, chatId, msg, e);
   }
 
   if (action === "e") {
     const [e, id] = args;
     const schema = await getSchema(env, ENT[e].key);
-    const rows = schema.editable.map((p, i) => [
-      btn(`✏️ ${p.name}`, `x:f:${e}:${id}:${i}`),
-    ]);
+    let editable = schema.editable;
+    if (e === "c") {
+      const categories = await listCategories(env, true);
+      const hasChildren = categories.some((x) =>
+        x.parentIds.some((parentId) => idEq(parentId, id)),
+      );
+      editable = editable.filter((p) => categoryHierarchyField(p.name) !== "level");
+      if (hasChildren) editable = editable.filter((p) => categoryHierarchyField(p.name) !== "parent");
+    }
+    const rows = editable.map((p) => {
+      const i = schema.editable.indexOf(p);
+      return [btn(`✏️ ${categoryFieldLabel(e, p)}`, `x:f:${e}:${id}:${i}`)];
+    });
     rows.push([btn("🔙 بازگشت", `x:v:${e}:${id}`)]);
     return editPanel(env, msg, "✏️ کدام فیلد را ویرایش کنم؟", {
       inline_keyboard: rows,
@@ -1833,10 +1949,19 @@ async function handleCrud(env, msg, action, args) {
 
   if (action === "d") {
     const [e, id] = args;
+    const boxWarning = e === "b"
+      ? `\n\n⚠️ با حذف این باکس، مانده‌ی آن (${fmt(await getBoxBalance(env, id))} تومان) وارد حساب اصلی می‌شود.`
+      : "";
+    const categoryChildren = e === "c"
+      ? await categoryDescendants(env, id)
+      : [];
+    const categoryWarning = categoryChildren.length
+      ? `\n\n⚠️ ${fa(categoryChildren.length)} زیر‌دسته هم همراه این دسته از نُوشن حذف می‌شود.`
+      : "";
     return editPanel(
       env,
       msg,
-      "🗑 مطمئنی این رکورد حذف شود؟\n(در Notion به سطل زباله می‌رود و تا ۳۰ روز قابل بازیابی است.)",
+      `🗑 مطمئنی این رکورد حذف شود؟${boxWarning}${categoryWarning}\n\n(در Notion به سطل زباله می‌رود و تا ۳۰ روز قابل بازیابی است.)`,
       {
         inline_keyboard: [
           [btn("🗑 بله، حذف کن", `x:D:${e}:${id}`)],
@@ -1848,8 +1973,54 @@ async function handleCrud(env, msg, action, args) {
 
   if (action === "D") {
     const [e, id] = args;
+    let transferred = 0;
+    let mainAccount = null;
+    let deletedCategoryChildren = 0;
+    if (e === "b") {
+      transferred = await getBoxBalance(env, id);
+      if (transferred > 0) {
+        mainAccount = await findMainAccount(env);
+        if (!mainAccount)
+          return editPanel(
+            env,
+            msg,
+            "❌ حساب اصلی مشخصی پیدا نشد؛ باکس حذف نشد و مانده‌اش دست‌نخورده ماند. نام یا نوع حساب اصلی را در فهرست حساب‌ها مشخص کن.",
+            { inline_keyboard: [[btn("🔙 بازگشت", `x:v:b:${id}`)]] },
+          );
+        await ensureAllocationAccountSchema(env);
+        await saveAllocation(env, {
+          operation: "move",
+          fromBox: { id, name: propTitle(await notion(env, "GET", `/pages/${id}`), BOX.title) },
+          toAccount: mainAccount,
+          amount: transferred,
+          date: todayTehran(),
+        });
+      }
+    }
+    if (e === "c") {
+      const descendants = await categoryDescendants(env, id);
+      try {
+        for (const child of descendants) {
+          await notion(env, "PATCH", `/pages/${child.id}`, { archived: true });
+          deletedCategoryChildren += 1;
+        }
+      } catch (error) {
+        console.error("Failed to archive category descendants", error);
+        const detail = deletedCategoryChildren
+          ? `تا اینجا ${fa(deletedCategoryChildren)} زیر‌دسته حذف شده؛ دستهٔ کلی حذف نشد.`
+          : "هیچ دسته‌ای حذف نشد و دستهٔ کلی دست‌نخورده ماند.";
+        return editPanel(env, msg, `❌ حذف کامل دسته‌ها انجام نشد. ${detail} دوباره تلاش کن.`, {
+          inline_keyboard: [[btn("🔙 بازگشت", `x:v:c:${id}`)]],
+        });
+      }
+    }
     await notion(env, "PATCH", `/pages/${id}`, { archived: true });
-    return editPanel(env, msg, "✅ رکورد حذف شد.", {
+    const deletedText = transferred > 0
+      ? `✅ باکس حذف شد و ${fmt(transferred)} تومان به حساب اصلی «${esc(mainAccount.name)}» منتقل شد.`
+      : e === "c" && deletedCategoryChildren > 0
+        ? `✅ دسته و ${fa(deletedCategoryChildren)} زیر‌دستهٔ آن از نُوشن حذف شدند.`
+        : "✅ رکورد حذف شد.";
+    return editPanel(env, msg, deletedText, {
       inline_keyboard: [
         [btn(`📋 فهرست ${ENT[e].fa}`, `x:l:${e}:0`)],
         [btn("🏠 منو", "m:home")],
@@ -2015,12 +2186,8 @@ async function listEntity(env, chatId, msg, e, page = 0) {
 
   const kb = [...buttons];
   if (nav.length) kb.push(nav);
-  kb.push([btn(`➕ ${ent.one} جدید`, `x:n:${e}`), btn("📤 CSV", `r:t:${e}`)]);
-  if (e === "s")
-    kb.push([
-      btn("📈 خرید دارایی", "tx:type:خرید دارایی"),
-      btn("📉 فروش دارایی", "tx:type:فروش دارایی"),
-    ]);
+  if (e !== "s")
+    kb.push([btn(`➕ ${ent.one} جدید`, `x:n:${e}`), btn("📤 CSV", `r:t:${e}`)]);
   kb.push([btn("🏠 منوی اصلی", "m:home")]);
 
   const text =
@@ -2031,88 +2198,135 @@ async function listEntity(env, chatId, msg, e, page = 0) {
   return panel(env, chatId, msg, text, { inline_keyboard: kb });
 }
 
-async function listCategoryRoots(env, chatId, msg, page = 0) {
+async function listCategoryRoots(env, chatId, msg, page = 0, group = null) {
   const all = await listCategories(env, true);
   const explicitRoots = all.filter((x) => x.level === "کلی");
-  const roots = explicitRoots.length
+  const allRoots = explicitRoots.length
     ? explicitRoots
     : all.filter((x) => !x.parentIds.length);
+  if (!group) {
+    const groups = categoryBrowseGroups(all, allRoots);
+    const rows = chunk(
+      groups.map((key) => btn(categoryBrowseGroupLabel(key), `x:cg:${key}`)),
+      2,
+    );
+    rows.push([btn("🏠 منوی اصلی", "m:home")]);
+    return panel(env, chatId, msg,
+      "🏷 <b>دسته‌بندی‌ها</b>\nدسته‌بندی‌های کدام گروه را می‌خواهی ببینی؟",
+      { inline_keyboard: rows });
+  }
+
+  const roots = allRoots.filter((root) => categoryRootBelongsToGroup(root, all, group));
   const pages = Math.max(1, Math.ceil(roots.length / PAGE_SIZE));
   page = Math.min(Math.max(0, page), pages - 1);
   const slice = roots.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const rows = slice.map((root) => {
     const status = root.active ? "" : " (غیرفعال)";
-    return [
-      btn(`${root.icon} ${root.name}${status}`, `x:ca:${compactId(root.id)}`),
-    ];
+    return [btn(`${root.icon} ${root.name}${status}`, `x:ca:${compactId(root.id)}:${group}`)];
   });
   const nav = [];
-  if (page > 0) nav.push(btn("◀️ قبلی", `x:cp:-:${page - 1}`));
+  if (page > 0) nav.push(btn("◀️ قبلی", `x:cp:-:${page - 1}:${group}`));
   if (pages > 1) nav.push(btn(`${fa(page + 1)}/${fa(pages)}`, "m:noop"));
-  if (page < pages - 1) nav.push(btn("بعدی ▶️", `x:cp:-:${page + 1}`));
+  if (page < pages - 1) nav.push(btn("بعدی ▶️", `x:cp:-:${page + 1}:${group}`));
   if (nav.length) rows.push(nav);
-  rows.push([btn("➕ دسته‌بندی جدید", "x:n:c")]);
+  rows.push([btn("➕ افزودن دسته‌ی کلی", `x:n:c:${group}`)]);
+  rows.push([btn("🔙 انتخاب گروه", "x:l:c:0")]);
   rows.push([btn("🏠 منوی اصلی", "m:home")]);
-  return panel(
-    env,
-    chatId,
-    msg,
-    `🏷 <b>دسته‌بندی‌ها</b> — دسته‌های والد\nبرای دیدن زیر‌دسته‌ها یا مدیریت خود دسته، روی آن بزن.`,
-    { inline_keyboard: rows },
-  );
+  return panel(env, chatId, msg,
+    `🏷 <b>دسته‌بندی‌های ${categoryBrowseGroupLabel(group)}</b>\nدسته‌ی کلی را انتخاب کن:`,
+    { inline_keyboard: rows });
 }
 
-async function showCategoryRoot(env, chatId, msg, rootId) {
+async function showCategoryRoot(env, chatId, msg, rootId, group = null) {
   const all = await listCategories(env, true);
   const root = all.find((x) => idEq(x.id, rootId));
-  if (!root) return listCategoryRoots(env, chatId, msg, 0);
+  if (!root) return listCategoryRoots(env, chatId, msg, 0, group);
+  const groupArg = group || categoryGroupForRoot(root, all) || "other";
   const rows = [
-    [btn("📂 مشاهده زیر‌دسته‌ها", `x:cs:${compactId(root.id)}:0`)],
+    [btn("📂 مشاهده زیر‌دسته‌ها", `x:cs:${compactId(root.id)}:0:${groupArg}`)],
     [btn("✏️ ویرایش همین دسته", `x:e:c:${compactId(root.id)}`)],
     [btn("🗑 حذف همین دسته", `x:d:c:${compactId(root.id)}`)],
-    [btn("🔙 دسته‌های والد", "x:l:c:0")],
+    [btn("🔙 دسته‌های کلی", `x:cg:${groupArg}`)],
   ];
-  return panel(
-    env,
-    chatId,
-    msg,
-    `${root.icon} <b>${esc(root.name)}</b>${root.active ? "" : "\nوضعیت: غیرفعال"}\nبرای مشاهده یا مدیریت زیر‌دسته‌ها، گزینه‌ی زیر را انتخاب کن.`,
-    { inline_keyboard: rows },
-  );
+  return panel(env, chatId, msg,
+    `${root.icon} <b>${esc(root.name)}</b>${root.active ? "" : "\nوضعیت: غیرفعال"}\nبرای دیدن زیر‌دسته‌ها، گزینه‌ی زیر را انتخاب کن.`,
+    { inline_keyboard: rows });
 }
 
-async function listCategoryChildren(env, chatId, msg, rootId, page = 0) {
+async function listCategoryChildren(env, chatId, msg, rootId, page = 0, group = null) {
   const all = await listCategories(env, true);
   const root = all.find((x) => idEq(x.id, rootId));
-  if (!root) return listCategoryRoots(env, chatId, msg, 0);
+  if (!root) return listCategoryRoots(env, chatId, msg, 0, group);
+  const groupArg = group || categoryGroupForRoot(root, all) || "other";
   const children = all.filter((x) =>
-    x.parentIds.some((id) => idEq(id, root.id)),
+    x.parentIds.some((id) => idEq(id, root.id)) &&
+    categoryRootBelongsToGroup(root, all, groupArg) &&
+    categoryChildBelongsToGroup(x, root, groupArg),
   );
   const pages = Math.max(1, Math.ceil(children.length / PAGE_SIZE));
   page = Math.min(Math.max(0, page), pages - 1);
   const slice = children.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const rows = slice.map((child) => [
-    btn(
-      `${child.icon} ${child.name}${child.active ? "" : " (غیرفعال)"}`,
-      `x:v:c:${compactId(child.id)}`,
-    ),
+    btn(`${child.icon} ${child.name}${child.active ? "" : " (غیرفعال)"}`, `x:v:c:${compactId(child.id)}`),
   ]);
   const nav = [];
-  if (page > 0)
-    nav.push(btn("◀️ قبلی", `x:cp:${compactId(root.id)}:${page - 1}`));
+  if (page > 0) nav.push(btn("◀️ قبلی", `x:cp:${compactId(root.id)}:${page - 1}:${groupArg}`));
   if (pages > 1) nav.push(btn(`${fa(page + 1)}/${fa(pages)}`, "m:noop"));
-  if (page < pages - 1)
-    nav.push(btn("بعدی ▶️", `x:cp:${compactId(root.id)}:${page + 1}`));
+  if (page < pages - 1) nav.push(btn("بعدی ▶️", `x:cp:${compactId(root.id)}:${page + 1}:${groupArg}`));
   if (nav.length) rows.push(nav);
-  rows.push([btn("➕ دسته‌بندی جدید", "x:n:c")]);
-  rows.push([btn("🔙 بازگشت به والد", `x:ca:${compactId(root.id)}`)]);
-  return panel(
-    env,
-    chatId,
-    msg,
-    `${root.icon} <b>${esc(root.name)}</b>\nزیر‌دسته‌ها را برای ویرایش یا حذف انتخاب کن:`,
-    { inline_keyboard: rows },
-  );
+  rows.push([
+    btn("✏️ ویرایش دسته", `x:e:c:${compactId(root.id)}`),
+    btn("🗑 حذف دسته", `x:d:c:${compactId(root.id)}`),
+  ]);
+  rows.push([btn("➕ افزودن زیر‌دسته", `x:n:c:${groupArg}:${compactId(root.id)}`)]);
+  rows.push([btn("🔙 بازگشت به دسته‌های کلی", `x:cg:${groupArg}`)]);
+  return panel(env, chatId, msg,
+    `${root.icon} <b>${esc(root.name)}</b>\nزیر‌دسته‌ها را انتخاب کن:`,
+    { inline_keyboard: rows });
+}
+
+function categoryBrowseGroupLabel(group) {
+  return ({ income: "💰 درآمدی", investment: "📈 سرمایه‌گذاری", expense: "💸 هزینه‌ای", other: "🏷 سایر" })[group] || "🏷 سایر";
+}
+
+function categoryBrowseGroups(all, roots) {
+  const groups = new Set();
+  for (const root of roots) {
+    const children = all.filter((x) => x.parentIds.some((id) => idEq(id, root.id)));
+    const rootGroup = categoryGroupForRoot(root, all);
+    if (rootGroup !== "other") groups.add(rootGroup);
+    else if (children.length) {
+      for (const child of children) {
+        const kind = categoryGroupKind(child.group);
+        groups.add(kind || "other");
+      }
+    } else groups.add("other");
+  }
+  return ["income", "investment", "expense", "other"].filter((x) => groups.has(x));
+}
+
+function categoryGroupForRoot(root, all) {
+  const direct = categoryGroupKind(root.group) || categoryGroupKind(root.name);
+  if (direct) return direct;
+  const children = all.filter((x) => x.parentIds.some((id) => idEq(id, root.id)));
+  const kinds = [...new Set(children.map((x) => categoryGroupKind(x.group)).filter(Boolean))];
+  return kinds.length === 1 ? kinds[0] : "other";
+}
+
+function categoryRootBelongsToGroup(root, all, group) {
+  const direct = categoryGroupKind(root.group) || categoryGroupKind(root.name);
+  if (direct) return direct === group;
+  const childGroups = all
+    .filter((x) => x.parentIds.some((id) => idEq(id, root.id)))
+    .map((x) => categoryGroupKind(x.group))
+    .filter(Boolean);
+  if (childGroups.length) return childGroups.includes(group);
+  return group === "other";
+}
+
+function categoryChildBelongsToGroup(child, root, group) {
+  const kind = categoryGroupKind(child.group);
+  return (kind || group) === group;
 }
 
 async function briefOf(env, e, p) {
@@ -2150,7 +2364,7 @@ async function briefOf(env, e, p) {
         : "",
     };
   }
-  if (e === "c") return { icon: pageEmoji(p), text: "" };
+  if (e === "c") return { icon: pageEmoji(p, ""), text: "" };
   return { icon: "🏷", text: "" };
 }
 
@@ -2177,7 +2391,9 @@ async function showItem(env, chatId, msg, e, id, note = "") {
 
   const lines = [];
   if (note) lines.push(esc(note), "");
-  const itemIcon = e === "c" ? pageEmoji(page) : ent.icon;
+  const itemIcon = e === "c"
+    ? categoryDisplayIcon(page)
+    : ent.icon;
   lines.push(
     `${esc(itemIcon)} <b>${esc(propTitle(page, ent.title) || pageTitle(page) || "بدون عنوان")}</b>`,
     "",
@@ -2198,7 +2414,7 @@ async function showItem(env, chatId, msg, e, id, note = "") {
       text = cellText(page, p, { money, rel });
     }
     if (text === "") continue;
-    lines.push(`${esc(p.name)}: <b>${esc(text)}</b>${money ? " تومان" : ""}`);
+    lines.push(`${esc(categoryFieldLabel(e, p))}: <b>${esc(text)}</b>${money ? " تومان" : ""}`);
   }
 
   if (e === "g") {
@@ -2219,11 +2435,132 @@ async function showItem(env, chatId, msg, e, id, note = "") {
       : `x:l:${e}:0`;
   const kb = {
     inline_keyboard: [
+      ...(e === "a" ? [[btn("💰 شارژ حساب", `x:charge:${cid}`)]] : []),
+      ...(e === "s" ? [[btn("📉 فروش این دارایی", `as:start:${cid}`)]] : []),
+      ...(e === "b" ? [[btn("➕ افزودن باکس جدید", "x:n:b")]] : []),
       [btn("✏️ ویرایش", `x:e:${e}:${cid}`), btn("🗑 حذف", `x:d:${e}:${cid}`)],
       [btn("🔙 فهرست", backToList), btn("🏠 منو", "m:home")],
     ],
   };
   return panel(env, chatId, msg, lines.join("\n"), kb);
+}
+
+async function startAssetSale(env, chatId, msg, assetId) {
+  const page = await notion(env, "GET", `/pages/${assetId}`);
+  if (page.archived) return listEntity(env, chatId, msg, "s", 0);
+  const asset = {
+    id: page.id,
+    name: propTitle(page, AST.title),
+    qty: propNumber(page, AST.qty),
+    price: propNumber(page, AST.price),
+  };
+  if (!(asset.qty > 0))
+    return editPanel(env, msg, "مقدار فعلی این دارایی برای فروش صفر است.", {
+      inline_keyboard: [[btn("🔙 بازگشت به دارایی", `x:v:s:${compactId(asset.id)}`)]],
+    });
+  const state = { flow: "asset-sale", step: "quantity", asset, date: todayTehran() };
+  await setState(env, chatId, state);
+  return panel(env, chatId, msg,
+    `📉 فروش «${esc(asset.name)}»\nمقدار قابل فروش: <b>${fa(asset.qty)}</b>\nمقدار فروخته‌شده را وارد کن:`,
+    { inline_keyboard: [[btn("❌ لغو", "as:cancel")]] });
+}
+
+async function handleAssetSaleText(env, chatId, state, text) {
+  if (state.step === "quantity") {
+    const quantity = Number(toEnDigits(text).replace(/,/g, ""));
+    if (!(quantity > 0) || quantity > state.asset.qty)
+      return send(env, chatId, `مقدار باید بیشتر از صفر و حداکثر ${fa(state.asset.qty)} باشد.`);
+    state.quantity = quantity;
+    state.step = "base-price";
+    await setState(env, chatId, state);
+    return send(env, chatId, "قیمت پایه‌ی هر واحد دارایی را به تومان وارد کن:", {
+      reply_markup: { force_reply: true },
+    });
+  }
+  if (state.step === "base-price" || state.step === "proceeds") {
+    const amount = parseAmountStrict(text);
+    if (!(amount > 0)) return send(env, chatId, "مبلغ باید بیشتر از صفر باشد؛ مبلغ را به تومان وارد کن.");
+    if (state.step === "base-price") {
+      state.basePrice = amount;
+      state.step = "proceeds";
+      await setState(env, chatId, state);
+      return send(env, chatId, "مبلغ کل فروخته‌شده را به تومان وارد کن:", {
+        reply_markup: { force_reply: true },
+      });
+    }
+    state.proceeds = amount;
+    state.step = "destination";
+    await setState(env, chatId, state);
+    return showAssetSaleDestinations(env, chatId, null, state);
+  }
+  return send(env, chatId, "برای ادامه از دکمه‌های پیام استفاده کن یا /cancel را بزن.");
+}
+
+async function showAssetSaleDestinations(env, chatId, msg, state) {
+  const boxes = await listBoxes(env);
+  const accounts = await listAccounts(env);
+  const rows = [
+    ...boxes.map((x) => [btn(`📦 ${x.name}`, `as:box:${compactId(x.id)}`)]),
+    ...accounts.map((x) => [btn(`🏦 ${x.name}`, `as:account:${compactId(x.id)}`)]),
+    [btn("❌ لغو", "as:cancel")],
+  ];
+  return panel(env, chatId, msg, "مبلغ فروش به کجا واریز شده؟ باکس یا حساب مقصد را انتخاب کن:", { inline_keyboard: rows });
+}
+
+async function handleAssetSaleCallback(env, msg, action, args) {
+  const chatId = msg.chat.id;
+  if (action === "start") return startAssetSale(env, chatId, msg, args[0]);
+  const state = await getState(env, chatId);
+  if (!state || state.flow !== "asset-sale")
+    return editPanel(env, msg, "این عملیات منقضی شده. دوباره از صفحه‌ی دارایی شروع کن.", backHome());
+  if (action === "cancel") {
+    await clearState(env, chatId);
+    return showItem(env, chatId, msg, "s", state.asset.id, "عملیات فروش لغو شد.");
+  }
+  if (action === "box" && state.step === "destination") {
+    state.box = (await listBoxes(env)).find((x) => idEq(x.id, args[0]));
+    if (!state.box) return;
+  } else if (action === "account" && state.step === "destination") {
+    state.account = (await listAccounts(env)).find((x) => idEq(x.id, args[0]));
+    if (!state.account) return;
+  } else if (action === "save" && state.step === "confirm") {
+    const remaining = state.asset.qty - state.quantity;
+    const transaction = {
+      type: "فروش دارایی",
+      title: `فروش ${state.asset.name}`,
+      amount: state.proceeds,
+      date: state.date,
+      asset: { id: state.asset.id, name: state.asset.name },
+      assetQty: state.quantity,
+      unitPrice: Math.round(state.proceeds / state.quantity),
+      desc: `قیمت پایه هر واحد: ${fmt(state.basePrice)} تومان`,
+      box: state.box,
+      toAccount: state.account,
+      currency: DEFAULT_CURRENCY,
+    };
+    const properties = { [AST.qty]: { number: remaining } };
+    if (state.asset.price > 0) properties[AST.value] = { number: Math.round(state.asset.price * remaining) };
+    await notion(env, "PATCH", `/pages/${state.asset.id}`, { properties });
+    try {
+      await saveTransaction(env, transaction);
+    } catch (error) {
+      await notion(env, "PATCH", `/pages/${state.asset.id}`, {
+        properties: {
+          [AST.qty]: { number: state.asset.qty },
+          ...(state.asset.price > 0 ? { [AST.value]: { number: Math.round(state.asset.price * state.asset.qty) } } : {}),
+        },
+      }).catch(() => {});
+      throw error;
+    }
+    await clearState(env, chatId);
+    return showItem(env, chatId, msg, "s", state.asset.id,
+      `✅ فروش ثبت شد و ${fmt(state.proceeds)} تومان به ${state.box ? `باکس «${esc(state.box.name)}»` : `حساب «${esc(state.account.name)}»`} اضافه شد.`);
+  } else return;
+  state.step = "confirm";
+  await setState(env, chatId, state);
+  return panel(env, chatId, msg,
+    `📉 <b>تأیید فروش دارایی</b>\nدارایی: ${esc(state.asset.name)}\nمقدار فروش: ${fa(state.quantity)} از ${fa(state.asset.qty)}\nقیمت پایه هر واحد: ${fmt(state.basePrice)} تومان\nمبلغ کل فروش: <b>${fmt(state.proceeds)} تومان</b>\nمقصد: ${esc(state.box?.name || state.account?.name)}\nمقدار باقی‌مانده: ${fa(state.asset.qty - state.quantity)}`,
+    { inline_keyboard: [[btn("✅ ثبت فروش", "as:save")], [btn("❌ لغو", "as:cancel")]] });
 }
 
 /* ---- فیلدها: پرسیدن / دریافت مقدار ---- */
@@ -2232,7 +2569,9 @@ async function askField(env, chatId, msg, st, p, mode) {
   st.propName = p.name;
   st.opts = null;
   const displayName =
-    st.ent === "a" && p.name === "مانده اولیه" ? "موجودی حساب" : p.name;
+    st.ent === "a" && p.name === "مانده اولیه"
+      ? "موجودی حساب"
+      : categoryFieldLabel(st.ent, p);
   const head = `${mode === "new" ? "➕" : "✏️"} <b>${esc(displayName)}</b>`;
   const isMoney = p.type === "number" && isMoneyField(st.ent, p.name);
 
@@ -2284,7 +2623,7 @@ async function askField(env, chatId, msg, st, p, mode) {
   }
 
   if (p.type === "relation") {
-    st.opts = await relOptions(env, p, "");
+    st.opts = await relationOptionsForField(env, st, p, "");
     st.step = "rel";
     await setState(env, chatId, st);
     const rows = chunk(
@@ -2371,7 +2710,7 @@ async function handleRelationSearch(env, chatId, st, text) {
   const schema = await getSchema(env, ENT[st.ent].key);
   const p = schema.props.find((x) => x.name === st.propName);
   if (!p) return;
-  st.opts = await relOptions(env, p, text.trim());
+  st.opts = await relationOptionsForField(env, st, p, text.trim());
   await setState(env, chatId, st);
   if (!st.opts.length)
     return send(env, chatId, "چیزی پیدا نشد. دوباره تایپ کن یا /cancel.");
@@ -2848,6 +3187,109 @@ async function ensureAssetPurchaseFunds(env, chatId, msg, state) {
   return false;
 }
 
+async function startNewCategory(env, chatId, msg, group = null, parentId = null) {
+  let parent = null;
+  if (parentId) {
+    parent = (await listCategories(env, true)).find((x) => idEq(x.id, parentId));
+    if (!parent || parent.parentIds.length)
+      return editPanel(env, msg, "❌ ساخت دسته‌ی سطح سوم مجاز نیست. برای افزودن زیر‌دسته، یک دسته‌ی کلی را انتخاب کن.", backHome());
+  }
+  const schema = await getSchema(env, "categories");
+  const st = {
+    flow: "new",
+    ent: "c",
+    pos: 0,
+    props: {},
+    labels: {},
+    step: "value",
+  };
+  const orderField = schema.editable.find((p) => /ترتیب/.test(p.name));
+  const categoryRows = orderField ? await queryDb(env, "categories") : [];
+  const nextOrder = categoryRows.reduce(
+    (max, page) => Math.max(max, propNumber(page, orderField?.name)),
+    0,
+  ) + 1;
+  for (const p of schema.editable) {
+    if (/ترتیب/.test(p.name)) {
+      if (p.type === "number") st.props[p.name] = { number: nextOrder };
+      else if (p.type === "select" && p.options?.[0])
+        st.props[p.name] = selectProp(p.options[0]);
+      else if (p.type === "status" && p.options?.[0])
+        st.props[p.name] = { status: { name: p.options[0] } };
+      else if (p.type === "rich_text") st.props[p.name] = richTextProp(String(nextOrder));
+      if (st.props[p.name] !== undefined) st.labels[p.name] = String(nextOrder);
+    }
+    if (p.type === "checkbox" && p.name === CAT.active) {
+      st.props[p.name] = { checkbox: true };
+      st.labels[p.name] = "✅";
+    }
+    if (categoryHierarchyField(p.name) === "parent") {
+      if (parentId) {
+        if (p.type === "relation") st.props[p.name] = { relation: [{ id: parentId }] };
+        else if (p.type === "select" && p.options?.includes(parent.name))
+          st.props[p.name] = selectProp(parent.name);
+        else if (p.type === "status" && p.options?.includes(parent.name))
+          st.props[p.name] = { status: { name: parent.name } };
+        else if (p.type === "multi_select" && p.options?.includes(parent.name))
+          st.props[p.name] = { multi_select: [{ name: parent.name }] };
+        else if (p.type === "checkbox") st.props[p.name] = { checkbox: true };
+        else st.props[p.name] = emptyPayload(p);
+        st.labels[p.name] = parent.name;
+      } else {
+        st.props[p.name] = p.type === "relation" ? { relation: [] } : emptyPayload(p);
+        st.labels[p.name] = "—";
+      }
+    }
+    if (categoryHierarchyField(p.name) === "level") {
+      if (["select", "status"].includes(p.type)) {
+        const options = p.options || [];
+        const selected = parentId
+          ? options.find((x) => /جزئی|فرعی|زیر|فرزند/.test(x)) || options.find((x) => x !== "کلی")
+          : options.find((x) => /کلی|مادر|والد/.test(x));
+        st.props[p.name] = selected
+          ? p.type === "status" ? { status: { name: selected } } : selectProp(selected)
+          : p.type === "status" ? { status: null } : { select: null };
+        st.labels[p.name] = selected || "—";
+      } else if (p.type === "number") {
+        st.props[p.name] = { number: parentId ? 2 : 1 };
+        st.labels[p.name] = parentId ? "۲" : "۱";
+      } else if (p.type === "rich_text") {
+        const value = parentId ? "زیر‌دسته" : "کلی";
+        st.props[p.name] = richTextProp(value);
+        st.labels[p.name] = value;
+      } else if (p.type === "checkbox") {
+        st.props[p.name] = { checkbox: !!parentId };
+        st.labels[p.name] = parentId ? "✅" : "⬜";
+      }
+    }
+    if (group && /گروه|نوع/.test(p.name) && ["select", "status"].includes(p.type)) {
+      const selected = (p.options || []).find((x) => categoryGroupKind(x) === group);
+      if (selected) {
+        st.props[p.name] = p.type === "status" ? { status: { name: selected } } : selectProp(selected);
+        st.labels[p.name] = selected;
+      }
+    }
+  }
+  return advanceNew(env, chatId, msg, st);
+}
+
+function categoryHierarchyField(name) {
+  const normalized = String(name || "").replace(/[\u200c\s_-]/g, "").toLowerCase();
+  if (normalized === CAT.parent.replace(/[\u200c\s_-]/g, "").toLowerCase() ||
+      /دسته.{0,5}(?:مادر|والد)|(?:مادر|والد).{0,5}دسته/.test(normalized))
+    return "parent";
+  if (normalized === CAT.level.replace(/[\u200c\s_-]/g, "").toLowerCase() ||
+      /سطح|زیر.*دسته/.test(normalized))
+    return "level";
+  return null;
+}
+
+function categoryFieldLabel(entity, property) {
+  return entity === "c" && categoryHierarchyField(property.name) === "parent"
+    ? "دسته‌ی کلی"
+    : property.name;
+}
+
 async function startNew(env, chatId, msg, e) {
   if (e === "s") return startNewAsset(env, chatId, msg);
   const schema = await getSchema(env, ENT[e].key);
@@ -2909,7 +3351,9 @@ async function advanceNew(env, chatId, msg, st) {
       continue;
     const money = isMoneyField(st.ent, p.name);
     const displayName =
-      st.ent === "a" && ["مانده اولیه", ACC.balance].includes(p.name)
+      st.ent === "c" && categoryHierarchyField(p.name) === "parent"
+        ? "دسته‌ی کلی"
+        : st.ent === "a" && ["مانده اولیه", ACC.balance].includes(p.name)
         ? "موجودی حساب"
         : st.ent === "b" && p.name === BOX.title
           ? "نام باکس"
@@ -3013,6 +3457,15 @@ async function relOptions(env, p, search) {
   return rows
     .map((r) => ({ id: r.id, name: pageTitle(r) }))
     .filter((x) => x.name);
+}
+
+async function relationOptionsForField(env, st, p, search) {
+  if (st.ent !== "c" || p.name !== CAT.parent) return relOptions(env, p, search);
+  const roots = (await listCategories(env, true)).filter((x) => !x.parentIds.length);
+  const query = String(search || "").trim();
+  return roots
+    .filter((x) => !query || x.name.includes(query))
+    .map((x) => ({ id: x.id, name: x.name }));
 }
 
 const titleCache = new Map();
@@ -3876,7 +4329,9 @@ function preparePdfReport(report, ent, mode) {
     kept.map(({ name }) => name),
     ...rows.map((row) =>
       kept.map(({ index, name }) => {
-        const value = row[index] ?? "";
+        let value = row[index] ?? "";
+        if (ent.key === "allocations" && name.trim() === ALC.title)
+          value = value.replace(/→/g, "↔");
         return /\(تومان\)\s*$/.test(name) ? formatPdfToman(value) : value;
       }),
     ),
@@ -4174,11 +4629,15 @@ const relationProp = (id) => ({ relation: [{ id }] });
 
 function isHiddenField(e, p) {
   const name = String(p.name || "").trim();
+  const normalizedName = name.replace(/[\s_-]/g, "").toLowerCase();
   if (p.type === "unique_id") return true;
+  if (/^(?:app|application)?id$/.test(normalizedName)) return true;
   if (e === "b" && [BOX.system, BOX.incoming, BOX.outgoing].includes(name))
     return true;
   if (e === "b" && /کد|ترتیب/.test(name)) return true;
   if (e === "b" && (p.type === "relation" || /ورودی|خروجی/.test(name)))
+    return true;
+  if (e === "c" && p.type === "relation" && categoryHierarchyField(name) !== "parent")
     return true;
   if ([TX.currency, TX.chartGroup, ACC.currency, AST.currency].includes(name))
     return true;
@@ -4196,8 +4655,7 @@ function isMoneyField(e, name) {
 
 function isHiddenAccountDetailField(e, p) {
   if (e !== "a") return false;
-  const normalizedName = String(p.name).replace(/\s/g, "").toLowerCase();
-  return p.name === "مانده اولیه" || normalizedName === "appid";
+  return p.name === "مانده اولیه";
 }
 
 function isAccountOpeningDateField(p) {
@@ -4323,6 +4781,24 @@ async function getAccountBalance(env, id) {
   return page ? exactNumber(env, page, ACC.balance) : 0;
 }
 
+async function findMainAccount(env) {
+  const rows = (await queryDb(env, "accounts")).filter(
+    (p) => propCheckbox(p, ACC.active) !== false,
+  );
+  const accounts = rows.map((p) => ({
+    id: p.id,
+    name: propTitle(p, ACC.title),
+    type: propChoice(p, ACC.type),
+  }));
+  return (
+    accounts.find((x) => x.name.trim() === "حساب اصلی") ||
+    accounts.find((x) => x.name.trim() === "اصلی") ||
+    accounts.find((x) => /اصلی/.test(x.type || "")) ||
+    accounts.find((x) => /حساب\s*اصلی/.test(x.name || "")) ||
+    null
+  );
+}
+
 const allocationSchemaReady = new Map();
 async function ensureAllocationAccountSchema(env) {
   const allocationDbId = dbId(env, "allocations");
@@ -4375,15 +4851,95 @@ async function listCategories(env, includeInactive = false) {
   const rows = await queryDb(env, "categories");
   return rows
     .filter((p) => includeInactive || propCheckbox(p, CAT.active) !== false)
-    .map((p) => ({
-      id: p.id,
-      name: propTitle(p, CAT.title),
-      icon: pageEmoji(p),
-      level: propChoice(p, CAT.level),
-      active: propCheckbox(p, CAT.active) !== false,
-      parentIds: (p.properties?.[CAT.parent]?.relation || []).map((r) => r.id),
-    }))
+    .map((p) => {
+      const name = propTitle(p, CAT.title);
+      const group = categoryGroup(p);
+      const parentIds = (p.properties?.[CAT.parent]?.relation || []).map((r) => r.id);
+      return {
+        id: p.id,
+        name,
+        icon: categoryDisplayIcon(p),
+        level: propChoice(p, CAT.level),
+        group,
+        active: propCheckbox(p, CAT.active) !== false,
+        parentIds,
+      };
+    })
     .filter((x) => x.name);
+}
+
+async function categoryDescendants(env, categoryId) {
+  const categories = await listCategories(env, true);
+  const descendants = [];
+  let parents = [categoryId];
+  while (parents.length) {
+    const children = categories.filter((category) =>
+      !idEq(category.id, categoryId) &&
+      !descendants.some((found) => idEq(found.id, category.id)) &&
+      category.parentIds.some((parentId) =>
+        parents.some((id) => idEq(id, parentId)),
+      ),
+    );
+    if (!children.length) break;
+    descendants.push(...children);
+    parents = children.map((category) => category.id);
+  }
+  return descendants.reverse();
+}
+
+function categoryDisplayIcon(page) {
+  return page?.icon?.type === "emoji" && page.icon.emoji
+    ? page.icon.emoji
+    : "";
+}
+
+function categoryGroup(page) {
+  for (const [name, property] of Object.entries(page.properties || {})) {
+    const value =
+      property.select?.name ||
+      property.status?.name ||
+      property.multi_select?.map((x) => x.name).join(" ") ||
+      property.rich_text?.map((x) => x.plain_text).join("") ||
+      property.title?.map((x) => x.plain_text).join("") ||
+      "";
+    if (value && (/گروه|نوع/.test(name) || categoryGroupKind(value))) return value;
+  }
+  return "";
+}
+
+function categoryGroupKind(value) {
+  const normalized = String(value || "").replace(/[\u200c\s_-]/g, "");
+  if (/هزینه|خرج/.test(normalized)) return "expense";
+  if (/سرمایهگذاری/.test(normalized)) return "investment";
+  if (/درآمد/.test(normalized)) return "income";
+  return null;
+}
+
+async function transactionCategories(env, state) {
+  const all = await listCategories(env);
+  if (state?.flow !== "tx" || state.draft?.type !== "درآمد") return all;
+
+  const roots = all.filter((x) => x.level === "کلی");
+  const rootRows = roots.length ? roots : all.filter((x) => !x.parentIds.length);
+  const allowed = new Set();
+  for (const root of rootRows) {
+    const children = all.filter((x) =>
+      x.parentIds.some((id) => idEq(id, root.id)),
+    );
+    const rootKind = categoryGroupKind(root.group) || categoryGroupKind(root.name);
+    const childKinds = children.map(
+      (x) => categoryGroupKind(x.group) || rootKind || categoryGroupKind(root.name),
+    );
+    const rootAllowed = ["income", "investment"].includes(rootKind) ||
+      childKinds.some((kind) => ["income", "investment"].includes(kind));
+    if (!rootAllowed) continue;
+    allowed.add(compactId(root.id));
+    children.forEach((child, i) => {
+      if (["income", "investment"].includes(childKinds[i]))
+        allowed.add(compactId(child.id));
+    });
+  }
+  return all.filter((x) => allowed.has(compactId(x.id)));
 }
 
 async function getUnallocatedBox(env) {
