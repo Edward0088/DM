@@ -3771,7 +3771,6 @@ function reportTableMenu(env, chatId, msg) {
     [btn("— 🏦 حساب‌ها و دارایی‌ها —", "m:noop")],
     [btn("🏦 حساب‌ها", "r:t:a"), btn("📦 باکس‌ها", "r:t:b")],
     [btn("💎 دارایی‌ها", "r:t:s"), btn("🏷 دسته‌بندی‌ها", "r:t:c")],
-    [btn("🗂 گزارش همه‌ی بخش‌ها", "r:t:all")],
     [btn("🏠 منوی اصلی", "m:home")],
   ];
   return panel(
@@ -3788,6 +3787,13 @@ async function handleReportCallback(env, msg, action, args) {
 
   if (action === "t") {
     const e = args[0];
+    if (e === "all")
+      return editPanel(
+        env,
+        msg,
+        "⏸ گزارش همه‌ی بخش‌ها موقتاً غیرفعال است.",
+        backHome(),
+      );
     if (e === "g")
       return editPanel(
         env,
@@ -3795,7 +3801,7 @@ async function handleReportCallback(env, msg, action, args) {
         "⏸ بخش اهداف مالی فعلاً غیرفعال است.",
         backHome(),
       );
-    if (e !== "all" && !ENT[e]) return;
+    if (!ENT[e]) return;
     const st = { flow: "report", ent: e, range: null, step: null };
     await setState(env, chatId, st);
     if (e === "all" || ENT[e].date) return rangeMenu(env, chatId, msg, st);
