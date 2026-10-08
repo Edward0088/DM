@@ -610,7 +610,7 @@ async function handleMenu(env, msg, action) {
     return editPanel(
       env,
       msg,
-      "💳 <b>تراکنش‌ها</b>\nیکی از گزینه‌ها را انتخاب کن:",
+      "💳 <b>تراکنش‌ها</b>\nدرآمد و هزینه‌هایت را ثبت کن یا سوابق تراکنش‌ها را ببین.\nاز کدام گزینه شروع کنیم؟",
       transactionsKeyboard(),
     );
   if (action === "allocations")
