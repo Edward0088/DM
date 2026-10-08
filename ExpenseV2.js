@@ -1285,12 +1285,15 @@ async function chooseCategoryRoot(
 }
 
 async function chooseCategoryGroups(env, chatId, msg, optional = false) {
-  const all = await transactionCategories(env, await getState(env, chatId));
+  const state = await getState(env, chatId);
+  const all = await transactionCategories(env, state);
   const explicitRoots = all.filter((x) => x.level === "کلی");
   const roots = explicitRoots.length
     ? explicitRoots
     : all.filter((x) => !x.parentIds.length);
-  const groups = categoryBrowseGroups(all, roots);
+  const groups = categoryBrowseGroups(all, roots).filter(
+    (group) => !(state?.flow === "tx" && state.draft?.type === "هزینه" && group === "income"),
+  );
   const rows = chunk(
     groups.map((group) =>
       btn(categoryBrowseGroupLabel(group), `tx:catgroup:${group}:${optional ? "1" : "0"}`),
