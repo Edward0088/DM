@@ -6,7 +6,7 @@ The repository currently consists of `ExpenseV2.js`, a single-file Cloudflare Wo
 
 ## Development and Deployment
 
-No package manifest, build script, or deployment configuration is checked in. Make edits to `ExpenseV2.js` and deploy it as a Cloudflare Worker using the project's configured Cloudflare workflow. If Node.js is available, run `node --check ExpenseV2.js` for a basic JavaScript syntax check; this does not validate Cloudflare bindings or remote API behavior.
+The Worker is configured in `wrangler.jsonc` and is deployed with Wrangler. After each completed user-requested code change, run `node --check ExpenseV2.js`, commit the change, then deploy the latest committed Worker with `wrangler deploy` from the repository root. Report any deployment failure and its reason. Do not deploy unrelated uncommitted changes; check `git status` first.
 
 Configure the Worker with `TELEGRAM_TOKEN`, `NOTION_TOKEN`, `WEBHOOK_SECRET`, `ALLOWED_USER_ID`, and the Notion database IDs documented at the top of `ExpenseV2.js`. Bind the D1 database as `DB`. For PDF reports, add a Browser Rendering binding named `BROWSER`, or set `CLOUDFLARE_ACCOUNT_ID` and a `CLOUDFLARE_API_TOKEN` with Browser Rendering Write access. `BOT_API_BASE` is optional. Protect secrets and never commit token values. The `/setup` endpoint requires the webhook secret; `/health` provides a basic availability check.
 
