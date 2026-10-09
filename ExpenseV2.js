@@ -1058,20 +1058,37 @@ async function handleTxCallback(env, msg, action, args) {
   }
 
   if (action === "save") {
+    const d = state.draft;
     if (!(await ensureTransactionFunds(env, chatId, state, msg))) return;
-    await saveTransaction(env, state.draft);
+    await saveTransaction(env, d);
     await clearState(env, chatId);
-    return editPanel(
-      env,
-      msg,
-      `✅ <b>تراکنش ثبت شد</b>\n${esc(state.draft.title)}\nنوع: ${esc(state.draft.type)}\nمبلغ: <b>${fmt(state.draft.amount)} تومان</b>`,
-      {
-        inline_keyboard: [
-          [btn("➕ تراکنش جدید", "m:new")],
-          [btn("💳 تراکنش‌ها", "m:txhistory"), btn("🏠 منو", "m:home")],
-        ],
-      },
-    );
+    const boxReplacesAccount = Boolean(d.box && TYPE_META[d.type].optionalBox);
+    const lines = [
+      "✅ <b>تراکنش ثبت شد</b>",
+      "",
+      "<b>" + esc(d.title) + "</b>",
+      TYPE_META[d.type].icon + " " + esc(d.type) + " · مبلغ: <b>" + fmt(d.amount) + " تومان</b>",
+      "📅 تاریخ: " + jalaliStr(d.date),
+      d.fromAccount && !boxReplacesAccount
+        ? "از حساب: " + esc(d.fromAccount.name)
+        : null,
+      d.toAccount && !boxReplacesAccount
+        ? "به حساب: " + esc(d.toAccount.name)
+        : null,
+      d.box ? "📦 باکس: " + esc(d.box.name) : null,
+      d.category
+        ? "🏷 دسته‌بندی: " +
+          esc((d.category.icon ? d.category.icon + " " : "") + d.category.name)
+        : null,
+      d.asset ? "💎 دارایی: " + esc(d.asset.name) + " (" + fa(d.assetQty) + ")" : null,
+      d.desc ? "توضیحات: " + esc(d.desc) : null,
+    ].filter(Boolean);
+    return editPanel(env, msg, lines.join("\n"), {
+      inline_keyboard: [
+        [btn("➕ تراکنش جدید", "m:new")],
+        [btn("💳 تراکنش‌ها", "m:txhistory"), btn("🏠 منو", "m:home")],
+      ],
+    });
   }
 }
 
@@ -2404,9 +2421,23 @@ async function showItem(env, chatId, msg, e, id, note = "") {
     "",
   );
 
+  const visibleTransactionFields = new Set([
+    TX.type,
+    TX.amount,
+    TX.date,
+    TX.fromAccount,
+    TX.toAccount,
+    TX.category,
+    TX.box,
+    TX.asset,
+    TX.assetQty,
+    TX.unitPrice,
+    TX.desc,
+  ]);
   for (const p of schema.props) {
     if (
       p.type === "title" ||
+      (e === "t" && !visibleTransactionFields.has(p.name)) ||
       isHiddenField(e, p) ||
       isHiddenAccountDetailField(e, p)
     )
