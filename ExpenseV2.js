@@ -48,6 +48,7 @@ const TX = {
   asset: "دارایی",
   assetQty: "مقدار دارایی",
   unitPrice: "قیمت واحد",
+  assetValueAtPurchase: "ارزش دارایی هنگام خرید",
   goal: "هدف مالی",
   status: "وضعیت",
   desc: "توضیحات",
@@ -85,6 +86,7 @@ const AST = {
   qty: "مقدار فعلی",
   price: "قیمت فعلی",
   value: "ارزش بازار",
+  category: "دسته‌بندی سرمایه‌گذاری",
   active: "فعال",
 };
 const GOL = {
@@ -162,7 +164,7 @@ const ENT = {
     icon: "💳",
     title: TX.title,
     date: TX.date,
-    money: [TX.amount, TX.unitPrice],
+    money: [TX.amount, TX.unitPrice, TX.assetValueAtPurchase],
     groups: {
       day: { label: "📅 روزانه" },
       month: { label: "🗓 ماهانه" },
@@ -1433,6 +1435,8 @@ async function saveTransaction(env, d) {
   if (d.asset) props[TX.asset] = relationProp(d.asset.id);
   if (d.assetQty) props[TX.assetQty] = { number: d.assetQty };
   if (d.unitPrice) props[TX.unitPrice] = { number: d.unitPrice };
+  if (d.assetValueAtPurchase)
+    props[TX.assetValueAtPurchase] = { number: d.assetValueAtPurchase };
   if (d.desc) props[TX.desc] = richTextProp(d.desc);
   if (TYPE_META[d.type].chart)
     props[TX.chartGroup] = selectProp(TYPE_META[d.type].chart);
@@ -2757,7 +2761,58 @@ async function recomputeUnitPrice(env, pageId) {
   }
 }
 
+const assetReportSchemaReady = new Map();
+async function ensureAssetReportSchema(env) {
+  const assetsId = dbId(env, "assets");
+  const transactionsId = dbId(env, "transactions");
+  const cachedUntil = assetReportSchemaReady.get(assetsId);
+  if (cachedUntil && cachedUntil > Date.now()) return;
+
+  const [assetsDb, transactionsDb] = await Promise.all([
+    notion(env, "GET", "/databases/" + assetsId),
+    notion(env, "GET", "/databases/" + transactionsId),
+  ]);
+  const category = assetsDb.properties?.[AST.category];
+  if (category && (
+    category.type !== "relation" ||
+    !idEq(category.relation?.database_id, dbId(env, "categories"))
+  ))
+    throw new Error("ستون «" + AST.category + "» باید رابطه‌ای به پایگاه‌داده دسته‌بندی‌ها باشد");
+  const assetChanges = category ? {} : {
+    [AST.category]: {
+      relation: { database_id: dbId(env, "categories"), single_property: {} },
+    },
+  };
+
+  const valuation = transactionsDb.properties?.[TX.assetValueAtPurchase];
+  if (valuation && valuation.type !== "number")
+    throw new Error("ستون «" + TX.assetValueAtPurchase + "» در پایگاه‌داده تراکنش‌ها باید از نوع عدد باشد");
+  const transactionChanges = valuation ? {} : {
+    [TX.assetValueAtPurchase]: { number: { format: "number" } },
+  };
+
+  if (Object.keys(assetChanges).length) {
+    await notion(env, "PATCH", "/databases/" + assetsId, { properties: assetChanges });
+    schemaCache.delete(compactId(assetsId));
+  }
+  if (Object.keys(transactionChanges).length) {
+    await notion(env, "PATCH", "/databases/" + transactionsId, { properties: transactionChanges });
+    schemaCache.delete(compactId(transactionsId));
+  }
+  assetReportSchemaReady.set(assetsId, Date.now() + 10 * 60 * 1000);
+}
+
 async function startNewAsset(env, chatId, msg) {
+  try {
+    await ensureAssetReportSchema(env);
+  } catch (error) {
+    return editPanel(
+      env,
+      msg,
+      "❌ آماده‌سازی دسته‌بندی و گزارش خرید دارایی ناموفق بود: " + esc(error.message),
+      backHome(),
+    );
+  }
   const schema = await getSchema(env, "assets");
   const typeField = schema.props.find((p) => p.name === AST.type);
   if (!typeField || !["select", "status"].includes(typeField.type))
@@ -2774,6 +2829,7 @@ async function startNewAsset(env, chatId, msg) {
     qty: schema.props.find((p) => p.name === AST.qty),
     price: schema.props.find((p) => p.name === AST.price),
     value: schema.props.find((p) => p.name === AST.value),
+    category: schema.props.find((p) => p.name === AST.category),
     description: schema.props.find(
       (p) => p.type === "rich_text" && /توضیح/.test(p.name),
     ),
@@ -2899,6 +2955,68 @@ async function handleAssetCreateText(env, chatId, state, text) {
   );
 }
 
+async function assetInvestmentCategories(env) {
+  const all = await listCategories(env);
+  const explicitRoots = all.filter((x) => x.level === "کلی");
+  const roots = explicitRoots.length
+    ? explicitRoots
+    : all.filter((x) => !x.parentIds.length);
+  const result = [];
+  for (const root of roots) {
+    if (!categoryRootBelongsToGroup(root, all, "investment")) continue;
+    result.push(root);
+    result.push(
+      ...all.filter((x) =>
+        x.parentIds.some((id) => idEq(id, root.id)) &&
+        categoryChildBelongsToGroup(x, root, "investment"),
+      ),
+    );
+  }
+  return result;
+}
+
+async function showAssetCategoryChoices(env, chatId, msg, state, page = 0) {
+  const categories = await assetInvestmentCategories(env);
+  const pages = Math.max(1, Math.ceil(categories.length / PICK_SIZE));
+  page = Math.min(Math.max(0, page), pages - 1);
+  const slice = categories.slice(page * PICK_SIZE, (page + 1) * PICK_SIZE);
+  const rows = chunk(
+    slice.map((category) =>
+      btn(
+        (category.icon ? category.icon + " " : "") + category.name,
+        "x:assetcat:" + compactId(category.id),
+      ),
+    ),
+    2,
+  );
+  if (pages > 1) {
+    const nav = [];
+    if (page > 0) nav.push(btn("◀️ قبلی", "x:assetcatpage:" + (page - 1)));
+    nav.push(btn(fa(page + 1) + "/" + fa(pages), "m:noop"));
+    if (page < pages - 1) nav.push(btn("بعدی ▶️", "x:assetcatpage:" + (page + 1)));
+    rows.push(nav);
+  }
+  if (!categories.length) {
+    rows.push([btn("🏷 مدیریت دسته‌بندی‌ها", "m:categories")]);
+    rows.push([btn("❌ لغو", "x:x")]);
+    return panel(
+      env,
+      chatId,
+      msg,
+      "برای ثبت دارایی، ابتدا یک دسته‌بندی از گروه سرمایه‌گذاری در بخش دسته‌بندی‌ها بساز.",
+      { inline_keyboard: rows },
+    );
+  }
+  rows.push([btn("❌ لغو", "x:x")]);
+  return panel(
+    env,
+    chatId,
+    msg,
+    "🏷 دسته‌بندی سرمایه‌گذاری این دارایی را انتخاب کن:",
+    { inline_keyboard: rows },
+  );
+}
+
 function showAssetTypeChoices(env, chatId, msg, state) {
   const options = state.types;
   if (!options.length)
@@ -3000,6 +3118,18 @@ async function handleAssetCreateCallback(env, msg, state, action, args) {
     const type = state.types[Number(args[0])];
     if (!type) return;
     state.asset.type = type;
+    state.assetStep = "category";
+    await setState(env, chatId, state);
+    return showAssetCategoryChoices(env, chatId, msg, state);
+  }
+  if (action === "assetcatpage" && state.assetStep === "category")
+    return showAssetCategoryChoices(env, chatId, msg, state, Number(args[0]) || 0);
+  if (action === "assetcat" && state.assetStep === "category") {
+    const category = (await assetInvestmentCategories(env)).find((x) =>
+      idEq(x.id, args[0]),
+    );
+    if (!category) return showAssetCategoryChoices(env, chatId, msg, state);
+    state.asset.category = category;
     state.assetStep = "price-unit";
     await setState(env, chatId, state);
     return showMoneyUnitChoice(
@@ -3047,6 +3177,9 @@ function sendAssetCreateConfirm(env, chatId, msg, state) {
     `عنوان: ${esc(a.title)}`,
     a.description ? `توضیحات: ${esc(a.description)}` : null,
     `نوع: ${esc(a.type)}`,
+    a.category
+      ? "دسته‌بندی سرمایه‌گذاری: " + esc((a.category.icon ? a.category.icon + " " : "") + a.category.name)
+      : null,
     `قیمت فعلی هر واحد: <b>${fmt(a.currentPrice)} تومان</b>`,
     `مقدار: <b>${fa(a.qty)}</b>`,
     `ارزش روز دارایی: <b>${fmt(value)} تومان</b>`,
@@ -3084,6 +3217,8 @@ async function saveNewAssetAndPurchase(env, chatId, msg, state) {
     properties[fields.value.name] = {
       number: Math.round(a.currentPrice * a.qty),
     };
+  if (fields.category && a.category)
+    properties[fields.category.name] = relationProp(a.category.id);
   if (fields.active) properties[AST.active] = { checkbox: true };
   if (fields.updatedAt)
     properties[fields.updatedAt.name] = { date: { start: a.date } };
@@ -3133,6 +3268,7 @@ async function saveNewAssetAndPurchase(env, chatId, msg, state) {
       asset: { id: assetPage.id, name: a.title },
       assetQty: a.qty,
       unitPrice: Math.round(a.cost / a.qty),
+      assetValueAtPurchase: Math.round(a.currentPrice * a.qty),
       box: a.box,
       fromAccount: a.account,
       currency: DEFAULT_CURRENCY,
@@ -4069,18 +4205,53 @@ function rangeTag(range) {
   return a === b ? a : `${a}_${b}`;
 }
 
+async function assetPurchaseMap(env, assets) {
+  const purchases = await queryDb(env, "transactions", {
+    filter: {
+      and: [
+        { property: TX.type, select: { equals: "خرید دارایی" } },
+        { property: TX.status, select: { equals: "ثبت‌شده" } },
+      ],
+    },
+    sorts: [{ property: TX.date, direction: "ascending" }],
+    limit: MAX_EXPORT_ROWS,
+  });
+  const assetIds = new Set(assets.map((asset) => compactId(asset.id)));
+  const byAsset = new Map();
+  for (const purchase of purchases) {
+    const ids = purchase.properties?.[TX.asset]?.relation || [];
+    for (const relation of ids) {
+      const id = compactId(relation.id);
+      if (assetIds.has(id) && !byAsset.has(id)) byAsset.set(id, purchase);
+    }
+  }
+  return byAsset;
+}
+
+const ASSET_PURCHASE_REPORT_COLUMNS = [
+  { name: "تاریخ خرید" },
+  { name: "ارزش دارایی هنگام خرید (تومان)", field: TX.assetValueAtPurchase },
+  { name: "مبلغ خرید (تومان)", field: TX.amount },
+  { name: "قیمت تمام‌شده هر واحد (تومان)", field: TX.unitPrice },
+];
+
 async function buildDetail(env, e, range) {
   const ent = ENT[e];
   const schema = await getSchema(env, ent.key);
   const pages = await fetchRows(env, e, range);
   const rel = await relationMap(env, schema, pages);
+  const purchaseByAsset = e === "s" ? await assetPurchaseMap(env, pages) : null;
 
-  const cols = [
+  let cols = [
     ...schema.props.filter((p) => p.type === "title"),
     ...schema.props.filter(
       (p) => p.type !== "title" && p.type !== "files" && !isHiddenField(e, p),
     ),
   ];
+  const assetCategoryColumn =
+    e === "s" ? cols.find((p) => p.name === AST.category) : null;
+  if (assetCategoryColumn)
+    cols = cols.filter((p) => p.name !== AST.category);
 
   // برای جدول‌های کوچک، مقدارهای دقیق rollup/formula پولی را جدا می‌گیریم
   const exact = new Map();
@@ -4098,30 +4269,47 @@ async function buildDetail(env, e, range) {
     for (let i = 0; i < jobs.length; i += 5) {
       await Promise.all(
         jobs.slice(i, i + 5).map(async ([pg, p]) => {
-          exact.set(`${pg.id}|${p.name}`, await exactNumber(env, pg, p.name));
+          exact.set(pg.id + "|" + p.name, await exactNumber(env, pg, p.name));
         }),
       );
     }
   }
 
   const header = cols.map((p) =>
-    isMoneyField(e, p.name) ? `${p.name} (تومان)` : p.name,
+    isMoneyField(e, p.name) ? p.name + " (تومان)" : p.name,
   );
+  if (e === "s") {
+    header.push(...ASSET_PURCHASE_REPORT_COLUMNS.map((column) => column.name));
+    if (assetCategoryColumn) header.push(assetCategoryColumn.name);
+  }
   const lines = [csvLine(header)];
   for (const pg of pages) {
-    lines.push(
-      csvLine(
-        cols.map((p) => {
-          const money = isMoneyField(e, p.name);
-          const key = `${pg.id}|${p.name}`;
-          if (money && exact.has(key)) return tomanPlain(exact.get(key));
-          return cellText(pg, p, { money, rel, csv: true });
+    const cells = cols.map((p) => {
+      const money = isMoneyField(e, p.name);
+      const key = pg.id + "|" + p.name;
+      if (money && exact.has(key)) return tomanPlain(exact.get(key));
+      return cellText(pg, p, { money, rel, csv: true });
+    });
+    if (e === "s") {
+      const purchase = purchaseByAsset.get(compactId(pg.id));
+      cells.push(
+        ...ASSET_PURCHASE_REPORT_COLUMNS.map((column) => {
+          if (!purchase) return "";
+          if (column.name === "تاریخ خرید") {
+            const date = propDate(purchase, TX.date);
+            return date ? jalaliStr(date, true) : "";
+          }
+          const value = numberFromItem(purchase.properties?.[column.field]);
+          return value == null ? "" : tomanPlain(value);
         }),
-      ),
-    );
+      );
+      if (assetCategoryColumn)
+        cells.push(cellText(pg, assetCategoryColumn, { rel, csv: true }));
+    }
+    lines.push(csvLine(cells));
   }
   return {
-    filename: `${ent.key}_detail_${rangeTag(ent.date ? range : null)}.csv`,
+    filename: ent.key + "_detail_" + rangeTag(ent.date ? range : null) + ".csv",
     csv: "\uFEFF" + lines.join("\r\n"),
     count: pages.length,
   };
@@ -4313,6 +4501,11 @@ const PDF_DETAIL_COLUMNS = {
     AST.qty,
     AST.price,
     AST.value,
+    "تاریخ خرید",
+    "ارزش دارایی هنگام خرید",
+    "مبلغ خرید",
+    "قیمت تمام‌شده هر واحد",
+    AST.category,
   ],
 };
 
