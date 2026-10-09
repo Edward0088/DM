@@ -2815,14 +2815,6 @@ async function startNewAsset(env, chatId, msg) {
   }
   const schema = await getSchema(env, "assets");
   const typeField = schema.props.find((p) => p.name === AST.type);
-  if (!typeField || !["select", "status"].includes(typeField.type))
-    return editPanel(
-      env,
-      msg,
-      `❌ فیلد «${esc(AST.type)}» در پایگاه‌داده دارایی‌ها برای انتخاب نوع آماده نیست.`,
-      backHome(),
-    );
-
   const fields = {
     title: schema.props.find((p) => p.name === AST.title),
     type: typeField,
@@ -2857,7 +2849,7 @@ async function startNewAsset(env, chatId, msg) {
     assetFlow: true,
     assetStep: "title",
     fields,
-    types: typeField.options || [],
+    types: typeField?.options || [],
     asset: { date: todayTehran() },
   };
   await setState(env, chatId, state);
@@ -3019,22 +3011,21 @@ async function showAssetCategoryChoices(env, chatId, msg, state, page = 0) {
 
 function showAssetTypeChoices(env, chatId, msg, state) {
   const options = state.types;
-  if (!options.length)
-    return panel(
-      env,
-      chatId,
-      msg,
-      "نوع دارایی در تنظیمات دیتابیس گزینه‌ای ندارد.",
-      backHome(),
-    );
   const rows = chunk(
-    options.map((name, index) => btn(name, `x:assettype:${index}`)),
+    options.map((name, index) => btn(name, "x:assettype:" + index)),
     2,
   );
+  rows.push([btn("⏭ رد کردن نوع دارایی", "x:assettypeskip")]);
   rows.push([btn("❌ لغو", "x:x")]);
-  return panel(env, chatId, msg, "نوع دارایی را انتخاب کن:", {
-    inline_keyboard: rows,
-  });
+  return panel(
+    env,
+    chatId,
+    msg,
+    options.length
+      ? "نوع دارایی را انتخاب کن یا این مرحله را رد کن:"
+      : "برای نوع دارایی گزینه‌ای تعریف نشده؛ می‌توانی این مرحله را رد کنی:",
+    { inline_keyboard: rows },
+  );
 }
 
 async function showAssetFundingChoices(env, chatId, msg, state) {
@@ -3114,10 +3105,17 @@ async function handleAssetCreateCallback(env, msg, state, action, args) {
     await setState(env, chatId, state);
     return showAssetFundingChoices(env, chatId, msg, state);
   }
-  if (action === "assettype" && state.assetStep === "type") {
-    const type = state.types[Number(args[0])];
-    if (!type) return;
-    state.asset.type = type;
+  if (
+    ["assettype", "assettypeskip"].includes(action) &&
+    state.assetStep === "type"
+  ) {
+    if (action === "assettype") {
+      const type = state.types[Number(args[0])];
+      if (!type) return;
+      state.asset.type = type;
+    } else {
+      delete state.asset.type;
+    }
     state.assetStep = "category";
     await setState(env, chatId, state);
     return showAssetCategoryChoices(env, chatId, msg, state);
@@ -3176,7 +3174,7 @@ function sendAssetCreateConfirm(env, chatId, msg, state) {
     "",
     `عنوان: ${esc(a.title)}`,
     a.description ? `توضیحات: ${esc(a.description)}` : null,
-    `نوع: ${esc(a.type)}`,
+    a.type ? `نوع: ${esc(a.type)}` : null,
     a.category
       ? "دسته‌بندی سرمایه‌گذاری: " + esc((a.category.icon ? a.category.icon + " " : "") + a.category.name)
       : null,
@@ -3207,10 +3205,11 @@ async function saveNewAssetAndPurchase(env, chatId, msg, state) {
     [fields.qty.name]: { number: a.qty },
     [fields.price.name]: { number: a.currentPrice },
   };
-  properties[AST.type] =
-    typeField.type === "status"
-      ? { status: { name: a.type } }
-      : selectProp(a.type);
+  if (a.type && typeField)
+    properties[AST.type] =
+      typeField.type === "status"
+        ? { status: { name: a.type } }
+        : selectProp(a.type);
   if (fields.description && a.description)
     properties[fields.description.name] = richTextProp(a.description);
   if (fields.value?.type === "number")
