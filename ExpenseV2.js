@@ -4252,7 +4252,10 @@ async function assetPurchaseMap(env, assets) {
     const ids = purchase.properties?.[TX.asset]?.relation || [];
     for (const relation of ids) {
       const id = compactId(relation.id);
-      if (assetIds.has(id) && !byAsset.has(id)) byAsset.set(id, purchase);
+      if (!assetIds.has(id)) continue;
+      const assetPurchases = byAsset.get(id) || [];
+      assetPurchases.push(purchase);
+      byAsset.set(id, assetPurchases);
     }
   }
   return byAsset;
@@ -4321,17 +4324,20 @@ async function buildDetail(env, e, range) {
       return cellText(pg, p, { money, rel, csv: true });
     });
     if (e === "s") {
-      const purchase = purchaseByAsset.get(compactId(pg.id));
+      const purchases = purchaseByAsset.get(compactId(pg.id)) || [];
       cells.push(
-        ...ASSET_PURCHASE_REPORT_COLUMNS.map((column) => {
-          if (!purchase) return "";
-          if (column.name === "تاریخ خرید") {
-            const date = propDate(purchase, TX.date);
-            return date ? jalaliStr(date, true) : "";
-          }
-          const value = numberFromItem(purchase.properties?.[column.field]);
-          return value == null ? "" : tomanPlain(value);
-        }),
+        ...ASSET_PURCHASE_REPORT_COLUMNS.map((column) =>
+          purchases
+            .map((purchase) => {
+              if (column.name === "تاریخ خرید") {
+                const date = propDate(purchase, TX.date);
+                return date ? jalaliStr(date, true) : "";
+              }
+              const value = numberFromItem(purchase.properties?.[column.field]);
+              return value == null ? "" : tomanPlain(value);
+            })
+            .join("؛ "),
+        ),
       );
       if (assetCategoryColumn)
         cells.push(cellText(pg, assetCategoryColumn, { rel, csv: true }));
