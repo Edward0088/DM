@@ -3944,6 +3944,7 @@ function reportFormatMenu(env, chatId, msg, st) {
 }
 
 async function runReport(env, chatId, msg, st, mode, format = "csv") {
+  await clearPreviousReportFiles(env, chatId);
   await panel(env, chatId, msg, "⏳ در حال ساخت گزارش…");
   const list = st.ent === "all" ? ENT_ORDER : [st.ent];
   let sent = 0;
@@ -5087,7 +5088,53 @@ async function sendDocument(
   const data = await res.json();
   if (!data.ok) throw new Error(`Telegram sendDocument: ${data.description}`);
   await rememberMessage(env, chatId, data.result).catch(() => {});
+  await rememberReportFile(env, chatId, data.result.message_id).catch(() => {});
   return data.result;
+}
+
+async function rememberReportFile(env, chatId, messageId) {
+  if (!env.DB || !messageId) return;
+  await ensureStateDb(env);
+  const key = "ui:reports:" + chatId;
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k=?")
+    .bind(key)
+    .first();
+  let ids = [];
+  try {
+    ids = JSON.parse(row?.v || "[]").map(Number).filter(Number.isFinite);
+  } catch {
+    ids = [];
+  }
+  ids = [...new Set([...ids, Number(messageId)])].slice(-500);
+  await env.DB.prepare(
+    "INSERT INTO kv(k,v,exp) VALUES(?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v, exp=excluded.exp",
+  )
+    .bind(key, JSON.stringify(ids), Date.now() + 7 * 24 * 60 * 60 * 1000)
+    .run();
+}
+
+async function clearPreviousReportFiles(env, chatId) {
+  if (!env.DB) return;
+  await ensureStateDb(env);
+  const key = "ui:reports:" + chatId;
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k=?")
+    .bind(key)
+    .first();
+  let ids = [];
+  try {
+    ids = JSON.parse(row?.v || "[]").map(Number).filter(Number.isFinite);
+  } catch {
+    ids = [];
+  }
+  await Promise.all(
+    ids.map((messageId) =>
+      tg(env, "deleteMessage", {
+        chat_id: chatId,
+        message_id: messageId,
+      }).catch(() => {}),
+    ),
+  );
+  await env.DB.prepare("DELETE FROM kv WHERE k=?").bind(key).run();
 }
 
 const btn = (text, callback_data) => ({ text, callback_data });
