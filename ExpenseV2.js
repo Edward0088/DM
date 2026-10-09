@@ -1908,7 +1908,6 @@ async function handleCrud(env, msg, action, args) {
         txTypeKeyboard(),
       );
     if (e === "l") return startAllocation(env, msg);
-    if (e === "s") return listEntity(env, chatId, msg, "s", 0);
     if (e === "c") return startNewCategory(env, chatId, msg, args[1], args[2]);
     return startNew(env, chatId, msg, e);
   }
@@ -2189,8 +2188,7 @@ async function listEntity(env, chatId, msg, e, page = 0) {
 
   const kb = [...buttons];
   if (nav.length) kb.push(nav);
-  if (e !== "s")
-    kb.push([btn(`➕ ${ent.one} جدید`, `x:n:${e}`), btn("📤 CSV", `r:t:${e}`)]);
+  kb.push([btn(`➕ ${ent.one} جدید`, `x:n:${e}`), btn("📤 CSV", `r:t:${e}`)]);
   kb.push([btn("🏠 منوی اصلی", "m:home")]);
 
   const text =
