@@ -2286,6 +2286,7 @@ async function listEntity(env, chatId, msg, e, page = 0) {
   });
   const hasNext = rows.length > (page + 1) * PAGE_SIZE;
   const slice = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const accountChanges = e === "a" ? await accountAllocationChanges(env) : null;
 
   const buttons = await Promise.all(
     slice.map(async (p) => {
@@ -2293,7 +2294,7 @@ async function listEntity(env, chatId, msg, e, page = 0) {
       const name = e === "l"
         ? rawName.replace(/→/g, "\u200E←\u200E")
         : rawName;
-      const brief = await briefOf(env, e, p);
+      const brief = await briefOf(env, e, p, accountChanges);
       return [
         btn(
           trunc(
@@ -2455,7 +2456,7 @@ function categoryChildBelongsToGroup(child, root, group) {
   return (kind || group) === group;
 }
 
-async function briefOf(env, e, p) {
+async function briefOf(env, e, p, accountChanges = null) {
   if (e === "t") {
     const type = propChoice(p, TX.type);
     return {
@@ -2468,7 +2469,7 @@ async function briefOf(env, e, p) {
   if (e === "a")
     return {
       icon: "🏦",
-      text: `${fmt(await exactNumber(env, p, ACC.balance))} ت`,
+      text: `${fmt(await accountBalanceFromPage(env, p, accountChanges))} ت`,
     };
   if (e === "b")
     return {
@@ -2514,6 +2515,7 @@ async function showItem(env, chatId, msg, e, id, note = "") {
         relIds.push(r.id);
   }
   const rel = await relNames(env, relIds);
+  const accountChanges = e === "a" ? await accountAllocationChanges(env) : null;
 
   const lines = [];
   if (note) lines.push(esc(note), "");
@@ -2534,7 +2536,9 @@ async function showItem(env, chatId, msg, e, id, note = "") {
       continue;
     const money = isMoneyField(e, p.name);
     let text;
-    if (money && (p.type === "formula" || p.type === "rollup")) {
+    if (e === "a" && p.name === ACC.balance) {
+      text = fmt(await accountBalanceFromPage(env, page, accountChanges));
+    } else if (money && (p.type === "formula" || p.type === "rollup")) {
       text = fmt(await exactNumber(env, page, p.name));
     } else {
       text = cellText(page, p, { money, rel });
@@ -3768,7 +3772,7 @@ function marketPricesUpdatedAt(results) {
 async function showOverview(env, msg) {
   const cm = currentJMonth();
   const prev = cm.m === 1 ? { y: cm.y - 1, m: 12 } : { y: cm.y, m: cm.m - 1 };
-  const [accounts, boxes, assets, thisMonth, lastMonth, categories] =
+  const [accounts, boxes, assets, thisMonth, lastMonth, categories, accountChanges] =
     await Promise.all([
       queryDb(env, "accounts"),
       queryDb(env, "boxes"),
@@ -3776,6 +3780,7 @@ async function showOverview(env, msg) {
       monthTransactions(env, cm.y, cm.m),
       monthTransactions(env, prev.y, prev.m),
       listCategories(env, true),
+      accountAllocationChanges(env),
     ]);
 
   const sum = async (pages, name, activeName) => {
@@ -3784,7 +3789,11 @@ async function showOverview(env, msg) {
     return nums.reduce((a, b) => a + b, 0);
   };
   const [cash, boxTotal, assetValue] = await Promise.all([
-    sum(accounts, ACC.balance, ACC.active),
+    Promise.all(
+      accounts
+        .filter((p) => propCheckbox(p, ACC.active) !== false)
+        .map((p) => accountBalanceFromPage(env, p, accountChanges)),
+    ).then((values) => values.reduce((total, value) => total + value, 0)),
     sum(boxes, BOX.balance, BOX.active),
     sum(assets, AST.value, AST.active),
   ]);
@@ -4223,6 +4232,17 @@ async function buildDetail(env, e, range) {
         }),
       );
     }
+  }
+  if (e === "a") {
+    const accountChanges = await accountAllocationChanges(env);
+    await Promise.all(
+      pages.map(async (pg) => {
+        exact.set(
+          `${pg.id}|${ACC.balance}`,
+          await accountBalanceFromPage(env, pg, accountChanges),
+        );
+      }),
+    );
   }
 
   const header = cols.map((p) =>
@@ -4905,9 +4925,40 @@ const listAccounts = (env) =>
   );
 
 async function getAccountBalance(env, id) {
-  const accounts = await queryDb(env, "accounts");
+  const [accounts, accountChanges] = await Promise.all([
+    queryDb(env, "accounts"),
+    accountAllocationChanges(env),
+  ]);
   const page = accounts.find((x) => idEq(x.id, id));
-  return page ? exactNumber(env, page, ACC.balance) : 0;
+  return page ? accountBalanceFromPage(env, page, accountChanges) : 0;
+}
+
+async function accountAllocationChanges(env) {
+  const rows = await queryDb(env, "allocations", {
+    limit: Number.MAX_SAFE_INTEGER,
+  });
+  const changes = new Map();
+  for (const row of rows) {
+    const status = propChoice(row, ALC.status);
+    if (status && status !== "ثبت‌شده") continue;
+    const amount = propNumber(row, ALC.amount);
+    if (!(amount > 0)) continue;
+    for (const relation of row.properties?.[ALC.fromAccount]?.relation || []) {
+      const id = compactId(relation.id);
+      changes.set(id, (changes.get(id) || 0) - amount);
+    }
+    for (const relation of row.properties?.[ALC.toAccount]?.relation || []) {
+      const id = compactId(relation.id);
+      changes.set(id, (changes.get(id) || 0) + amount);
+    }
+  }
+  return changes;
+}
+
+async function accountBalanceFromPage(env, page, accountChanges) {
+  const changes = accountChanges || await accountAllocationChanges(env);
+  return (await exactNumber(env, page, ACC.balance)) +
+    (changes.get(compactId(page.id)) || 0);
 }
 
 async function findMainAccount(env) {
