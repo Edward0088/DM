@@ -2285,7 +2285,10 @@ async function listEntity(env, chatId, msg, e, page = 0) {
 
   const buttons = await Promise.all(
     slice.map(async (p) => {
-      const name = propTitle(p, ent.title) || "بدون عنوان";
+      const rawName = propTitle(p, ent.title) || "بدون عنوان";
+      const name = e === "l"
+        ? rawName.replace(/→/g, "\u200E←\u200E")
+        : rawName;
       const brief = await briefOf(env, e, p);
       return [
         btn(
