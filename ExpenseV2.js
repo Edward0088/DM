@@ -342,7 +342,15 @@ async function handleUpdate(update, env) {
 
 async function handleText(msg, env) {
   try {
-    return await handleTextMessage(msg, env);
+    const isCommand = msg.text.trim().startsWith("/");
+    const previousState = isCommand ? null : await getState(env, msg.chat.id);
+    const result = await handleTextMessage(msg, env);
+    if (previousState) {
+      const currentState = await getState(env, msg.chat.id);
+      if (JSON.stringify(previousState) === JSON.stringify(currentState))
+        await repeatExpectedInput(env, msg.chat.id, previousState);
+    }
+    return result;
   } finally {
     await tg(env, "deleteMessage", {
       chat_id: msg.chat.id,
@@ -384,7 +392,7 @@ async function handleTextMessage(msg, env) {
   const state = await getState(env, chatId);
   if (state && acceptsTextInput(state)) {
     await cleanupMessages(env, chatId, msg.message_id).catch(() => {});
-  } else {
+  } else if (!state) {
     await clearActiveMenus(env, chatId, null, { deleteMenus: !state }).catch(
       () => {},
     );
@@ -539,8 +547,74 @@ async function handleTextMessage(msg, env) {
   return send(
     env,
     chatId,
-    "برای ادامه از دکمه‌های همان پیام استفاده کن، یا /cancel را بزن.",
+    "❌ این مرحله ورودی متنی نمی‌گیرد. لطفاً گزینه‌ی مناسب را از منوی زیر انتخاب کن؛ پیام اشتباهت پاک شد.",
   );
+}
+
+async function repeatExpectedInput(env, chatId, state) {
+  const prompt = (text, placeholder = "") =>
+    send(env, chatId, text, {
+      reply_markup: { force_reply: true, input_field_placeholder: placeholder },
+    });
+
+  if (state.flow === "tx") {
+    if (state.step === "title")
+      return prompt("عنوان تراکنش را وارد کن؛ مثلاً «خرید هفتگی» یا «حقوق مهرماه».", "مثلاً خرید هفتگی");
+    if (state.step === "amount-input")
+      return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
+    if (state.step === "assetQty")
+      return prompt("مقدار دارایی را به‌صورت عدد وارد کن؛ مثلاً <code>۰٫۵</code>.", "مثلاً ۰٫۵");
+    if (state.step === "description-input")
+      return panel(env, chatId, null, "توضیح را بنویس یا برای رد کردن از دکمه استفاده کن.", {
+        inline_keyboard: [[btn("⏭ رد کردن توضیحات", "tx:desc-skip")], [btn("❌ لغو", "tx:cancel")]],
+      });
+    if (["amount-choice", "amount-unit"].includes(state.step))
+      return showMoneyUnitChoice(env, chatId, null, "tx", "tx:cancel");
+  }
+  if (state.flow === "allocation") {
+    if (state.step === "amount-input")
+      return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
+    if (["amount-unit", "amount-choice"].includes(state.step))
+      return showMoneyUnitChoice(env, chatId, null, "al", "al:cancel");
+    if (state.step === "percent-input")
+      return prompt("درصد را از ۱ تا ۱۰۰ وارد کن؛ مثلاً <code>۲۵</code>.", "مثلاً ۲۵");
+    if (state.step === "amount")
+      return prompt("مبلغ را به تومان وارد کن؛ فقط عدد بفرست.", "مثلاً ۵۰۰۰۰۰");
+  }
+  if (state.flow === "asset-sale") {
+    if (state.step === "quantity")
+      return prompt(`مقدار فروخته‌شده را تا حداکثر ${fa(state.asset.qty)} وارد کن.`, "مثلاً ۱");
+    if (["base-price", "proceeds"].includes(state.step))
+      return prompt(state.step === "base-price" ? "قیمت پایه‌ی هر واحد را به تومان وارد کن:" : "مبلغ کل فروخته‌شده را به تومان وارد کن:", "مبلغ به تومان");
+    if (state.step === "destination")
+      return send(env, chatId, "لطفاً مقصد واریز را از گزینه‌های نمایش‌داده‌شده انتخاب کن.");
+  }
+  if (state.flow === "new" && state.assetFlow) {
+    if (state.assetStep === "title")
+      return prompt("عنوان دارایی را وارد کن؛ مثلاً «دلار» یا «طلای ۱۸ عیار».", "مثلاً دلار");
+    if (state.assetStep === "description")
+      return panel(env, chatId, null, "توضیحات دارایی را وارد کن یا برای رد کردن، «-» بفرست.", {
+        inline_keyboard: [[btn("⏭ رد کردن توضیحات", "x:assetdescskip")], [btn("❌ لغو", "x:x")]],
+      });
+    if (["price-input", "cost-input"].includes(state.assetStep))
+      return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
+    if (state.assetStep === "quantity")
+      return prompt("مقدار دارایی را به‌صورت عدد وارد کن؛ مثلاً <code>۰٫۵</code>.", "مثلاً ۰٫۵");
+    if (["cost-unit", "price-unit"].includes(state.assetStep))
+      return showMoneyUnitChoice(env, chatId, null, "x", "x:x");
+    return send(env, chatId, "لطفاً گزینه‌ی مناسب را از منوی نمایش‌داده‌شده انتخاب کن.");
+  }
+  if (state.flow === "edit" || state.flow === "new") {
+    if (state.step === "money-input")
+      return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
+    if (state.step === "text")
+      return prompt("مقدار این فیلد را وارد کن یا برای خالی گذاشتن «-» بفرست.");
+    if (state.step === "rel")
+      return send(env, chatId, "برای جست‌وجوی مورد مرتبط، نامش را وارد کن.");
+  }
+  if (state.flow === "report" && state.step === "range")
+    return prompt("بازه‌ی گزارش را وارد کن؛ مثلاً <code>۱۴۰۵/۰۷</code> یا <code>۱۴۰۵/۰۷/۰۱ تا ۱۴۰۵/۰۷/۱۵</code>.");
+  return send(env, chatId, "لطفاً گزینه‌ی مناسب را از منوی فعال انتخاب کن.");
 }
 
 function acceptsTextInput(state) {
@@ -1500,6 +1574,8 @@ async function startAllocation(env, msg) {
 
 async function handleAllocationCallback(env, msg, action, args) {
   const chatId = msg.chat.id;
+  if (action === "start-box")
+    return startBoxAllocation(env, msg, args[0]);
   const state = await getState(env, chatId);
 
   if (action === "cancel") {
@@ -1612,6 +1688,11 @@ async function handleAllocationCallback(env, msg, action, args) {
           `🏦 «${esc(account.name)}» موجودی قابل انتقال ندارد.`,
           backHome(),
         );
+      if (state.draft.toBox) {
+        state.step = "amount-unit";
+        await setState(env, chatId, state);
+        return showMoneyUnitChoice(env, chatId, msg, "al", "al:cancel");
+      }
       state.step = "to-box";
       await setState(env, chatId, state);
       return allocationChooseBox(env, msg, "to", null, state.maxAmount);
@@ -1718,6 +1799,36 @@ async function handleAllocationCallback(env, msg, action, args) {
   }
 }
 
+async function startBoxAllocation(env, msg, boxId) {
+  const chatId = msg.chat.id;
+  try {
+    await ensureAllocationAccountSchema(env);
+  } catch (e) {
+    return editPanel(
+      env,
+      msg,
+      `❌ مدل تخصیص حساب ↔ باکس آماده نشد: ${esc(e.message)}\nدسترسی اتصال Notion به پایگاه‌داده حساب‌ها و تخصیص‌ها را بررسی کن.`,
+      backHome(),
+    );
+  }
+  const target = (await listBoxes(env)).find((box) => idEq(box.id, boxId));
+  if (!target)
+    return editPanel(env, msg, "این باکس پیدا نشد یا دیگر در دسترس نیست.", {
+      inline_keyboard: [[btn("🔙 فهرست باکس‌ها", "x:l:b:0")]],
+    });
+  await setState(env, chatId, {
+    flow: "allocation",
+    step: "from-account",
+    draft: {
+      operation: "assign",
+      toBox: target,
+      date: todayTehran(),
+      status: "ثبت‌شده",
+    },
+  });
+  return allocationChooseAccount(env, msg, "from-account");
+}
+
 async function allocationChooseBox(env, msg, role, exclude, available = null) {
   const rows = (await listBoxes(env))
     .filter((x) => !exclude || !idEq(x.id, exclude))
@@ -1820,9 +1931,13 @@ async function saveAllocation(env, d) {
       [TX.date]: { date: { start: d.date } },
       [TX.status]: selectProp("ثبت‌شده"),
     };
-    if (d.operation === "assign")
+    if (d.operation === "assign") {
       txProps[TX.fromAccount] = relationProp(d.fromAccount.id);
-    else txProps[TX.toAccount] = relationProp(d.toAccount.id);
+      txProps[TX.box] = relationProp(d.toBox.id);
+    } else {
+      txProps[TX.toAccount] = relationProp(d.toAccount.id);
+      txProps[TX.box] = relationProp(d.fromBox.id);
+    }
     await notion(env, "POST", "/pages", {
       parent: { database_id: dbId(env, "transactions") },
       properties: txProps,
@@ -1897,8 +2012,13 @@ async function handleCrud(env, msg, action, args) {
   if (action === "v") return showItem(env, chatId, msg, args[0], args[1]);
 
   if (action === "charge") {
-    const account = (await listAccounts(env)).find((x) => idEq(x.id, args[0]));
-    if (!account) return listEntity(env, chatId, msg, "a", 0);
+    const entity = args.length > 1 ? args[0] : "a";
+    const id = args.length > 1 ? args[1] : args[0];
+    const target = entity === "b"
+      ? (await listBoxes(env)).find((x) => idEq(x.id, id))
+      : (await listAccounts(env)).find((x) => idEq(x.id, id));
+    if (!target) return listEntity(env, chatId, msg, entity === "b" ? "b" : "a", 0);
+    const targetName = entity === "b" ? "باکس" : "حساب";
     await setState(env, chatId, {
       flow: "tx",
       step: "title",
@@ -1906,15 +2026,15 @@ async function handleCrud(env, msg, action, args) {
         type: "درآمد",
         status: "ثبت‌شده",
         currency: DEFAULT_CURRENCY,
-        toAccount: account,
+        ...(entity === "b" ? { box: target } : { toAccount: target }),
         skipBox: true,
         accountCharge: true,
       },
     });
-    await editPanel(env, msg, `💰 شارژ حساب «${esc(account.name)}»`, {
+    await editPanel(env, msg, `💰 شارژ ${targetName} «${esc(target.name)}»`, {
       inline_keyboard: [[btn("❌ لغو", "tx:cancel")]],
     });
-    return send(env, chatId, `📝 عنوان این درآمد را وارد کن؛ این تراکنش مستقیماً به حساب «${esc(account.name)}» اضافه می‌شود و عنوانش در سوابق حساب دیده خواهد شد.\nمثلاً: <code>حقوق مهرماه</code>`, {
+    return send(env, chatId, `📝 عنوان این درآمد را وارد کن؛ این تراکنش مستقیماً به ${targetName} «${esc(target.name)}» اضافه می‌شود و عنوانش در سوابق آن دیده خواهد شد.\nمثلاً: <code>واریز به ${targetName}</code>`, {
       reply_markup: { force_reply: true, input_field_placeholder: "مثلاً واریز حقوق" },
     });
   }
@@ -2174,23 +2294,30 @@ async function handleCrud(env, msg, action, args) {
 async function listEntity(env, chatId, msg, e, page = 0) {
   if (e === "c") return listCategoryRoots(env, chatId, msg, page);
   const ent = ENT[e];
-  const sorts = ent.date
-    ? [
-        { property: ent.date, direction: "descending" },
-        { timestamp: "created_time", direction: "descending" },
-      ]
-    : [{ timestamp: "created_time", direction: "ascending" }];
-  const rows = await queryDb(env, ent.key, {
-    sorts,
-    limit: (page + 1) * PAGE_SIZE + 1,
-  });
+  const rows = ent.date
+    ? await queryDb(env, ent.key, {
+        sorts: [
+          { property: ent.date, direction: "descending" },
+          { timestamp: "created_time", direction: "descending" },
+        ],
+        limit: (page + 1) * PAGE_SIZE + 1,
+      })
+    : sortNamedPages(
+        await queryDb(env, ent.key, { limit: Number.MAX_SAFE_INTEGER }),
+        ent.title,
+        e === "b" ? BOX.order : null,
+      );
   const hasNext = rows.length > (page + 1) * PAGE_SIZE;
   const slice = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const accountChanges = e === "a" ? await accountAllocationChanges(env) : null;
 
   const buttons = await Promise.all(
     slice.map(async (p) => {
-      const name = propTitle(p, ent.title) || "بدون عنوان";
-      const brief = await briefOf(env, e, p);
+      const rawName = propTitle(p, ent.title) || "بدون عنوان";
+      const name = e === "l"
+        ? rawName.replace(/→/g, "\u200E←\u200E")
+        : rawName;
+      const brief = await briefOf(env, e, p, accountChanges);
       return [
         btn(
           trunc(
@@ -2351,7 +2478,7 @@ function categoryChildBelongsToGroup(child, root, group) {
   return (kind || group) === group;
 }
 
-async function briefOf(env, e, p) {
+async function briefOf(env, e, p, accountChanges = null) {
   if (e === "t") {
     const type = propChoice(p, TX.type);
     return {
@@ -2364,7 +2491,7 @@ async function briefOf(env, e, p) {
   if (e === "a")
     return {
       icon: "🏦",
-      text: `${fmt(await exactNumber(env, p, ACC.balance))} ت`,
+      text: `${fmt(await accountBalanceFromPage(env, p, accountChanges))} ت`,
     };
   if (e === "b")
     return {
@@ -2410,6 +2537,7 @@ async function showItem(env, chatId, msg, e, id, note = "") {
         relIds.push(r.id);
   }
   const rel = await relNames(env, relIds);
+  const accountChanges = e === "a" ? await accountAllocationChanges(env) : null;
 
   const lines = [];
   if (note) lines.push(esc(note), "");
@@ -2444,7 +2572,9 @@ async function showItem(env, chatId, msg, e, id, note = "") {
       continue;
     const money = isMoneyField(e, p.name);
     let text;
-    if (money && (p.type === "formula" || p.type === "rollup")) {
+    if (e === "a" && p.name === ACC.balance) {
+      text = fmt(await accountBalanceFromPage(env, page, accountChanges));
+    } else if (money && (p.type === "formula" || p.type === "rollup")) {
       text = fmt(await exactNumber(env, page, p.name));
     } else {
       text = cellText(page, p, { money, rel });
@@ -2471,9 +2601,12 @@ async function showItem(env, chatId, msg, e, id, note = "") {
       : `x:l:${e}:0`;
   const kb = {
     inline_keyboard: [
-      ...(e === "a" ? [[btn("💰 شارژ حساب", `x:charge:${cid}`)]] : []),
+      ...(e === "a" ? [[btn("💰 شارژ حساب", `x:charge:a:${cid}`)]] : []),
       ...(e === "s" ? [[btn("📉 فروش این دارایی", `as:start:${cid}`)]] : []),
-      ...(e === "b" ? [[btn("➕ افزودن باکس جدید", "x:n:b")]] : []),
+      ...(e === "b" ? [
+        [btn("💰 شارژ باکس", `al:start-box:${cid}`)],
+        [btn("➕ افزودن باکس جدید", "x:n:b")],
+      ] : []),
       [btn("✏️ ویرایش", `x:e:${e}:${cid}`), btn("🗑 حذف", `x:d:${e}:${cid}`)],
       [btn("🔙 فهرست", backToList), btn("🏠 منو", "m:home")],
     ],
@@ -3620,8 +3753,14 @@ async function relOptions(env, p, search) {
     search && schema.titleName
       ? { property: schema.titleName, title: { contains: search } }
       : undefined;
-  const rows = await queryDbById(env, p.relDb, { filter, limit: 40 });
-  return rows
+  const rows = await queryDbById(env, p.relDb, {
+    filter,
+    sorts: schema.titleName
+      ? [{ property: schema.titleName, direction: "ascending" }]
+      : undefined,
+    limit: 40,
+  });
+  return sortNamedPages(rows, schema.titleName)
     .map((r) => ({ id: r.id, name: pageTitle(r) }))
     .filter((x) => x.name);
 }
@@ -3806,7 +3945,7 @@ function marketPricesUpdatedAt(results) {
 async function showOverview(env, msg) {
   const cm = currentJMonth();
   const prev = cm.m === 1 ? { y: cm.y - 1, m: 12 } : { y: cm.y, m: cm.m - 1 };
-  const [accounts, boxes, assets, thisMonth, lastMonth, categories] =
+  const [accounts, boxes, assets, thisMonth, lastMonth, categories, accountChanges] =
     await Promise.all([
       queryDb(env, "accounts"),
       queryDb(env, "boxes"),
@@ -3814,6 +3953,7 @@ async function showOverview(env, msg) {
       monthTransactions(env, cm.y, cm.m),
       monthTransactions(env, prev.y, prev.m),
       listCategories(env, true),
+      accountAllocationChanges(env),
     ]);
 
   const sum = async (pages, name, activeName) => {
@@ -3822,7 +3962,11 @@ async function showOverview(env, msg) {
     return nums.reduce((a, b) => a + b, 0);
   };
   const [cash, boxTotal, assetValue] = await Promise.all([
-    sum(accounts, ACC.balance, ACC.active),
+    Promise.all(
+      accounts
+        .filter((p) => propCheckbox(p, ACC.active) !== false)
+        .map((p) => accountBalanceFromPage(env, p, accountChanges)),
+    ).then((values) => values.reduce((total, value) => total + value, 0)),
     sum(boxes, BOX.balance, BOX.active),
     sum(assets, AST.value, AST.active),
   ]);
@@ -4306,6 +4450,17 @@ async function buildDetail(env, e, range) {
         }),
       );
     }
+  }
+  if (e === "a") {
+    const accountChanges = await accountAllocationChanges(env);
+    await Promise.all(
+      pages.map(async (pg) => {
+        exact.set(
+          `${pg.id}|${ACC.balance}`,
+          await accountBalanceFromPage(env, pg, accountChanges),
+        );
+      }),
+    );
   }
 
   const header = cols.map((p) =>
@@ -4998,7 +5153,11 @@ async function getSchema(env, key) {
 }
 
 async function namedRows(env, key, titleField, pred = () => true) {
-  const rows = await queryDb(env, key);
+  const rows = sortNamedPages(
+    await queryDb(env, key, { limit: Number.MAX_SAFE_INTEGER }),
+    titleField,
+    key === "boxes" ? BOX.order : null,
+  );
   return rows
     .filter(pred)
     .map((p) => ({ id: p.id, name: propTitle(p, titleField) }))
@@ -5013,9 +5172,40 @@ const listAccounts = (env) =>
   );
 
 async function getAccountBalance(env, id) {
-  const accounts = await queryDb(env, "accounts");
+  const [accounts, accountChanges] = await Promise.all([
+    queryDb(env, "accounts"),
+    accountAllocationChanges(env),
+  ]);
   const page = accounts.find((x) => idEq(x.id, id));
-  return page ? exactNumber(env, page, ACC.balance) : 0;
+  return page ? accountBalanceFromPage(env, page, accountChanges) : 0;
+}
+
+async function accountAllocationChanges(env) {
+  const rows = await queryDb(env, "allocations", {
+    limit: Number.MAX_SAFE_INTEGER,
+  });
+  const changes = new Map();
+  for (const row of rows) {
+    const status = propChoice(row, ALC.status);
+    if (status && status !== "ثبت‌شده") continue;
+    const amount = propNumber(row, ALC.amount);
+    if (!(amount > 0)) continue;
+    for (const relation of row.properties?.[ALC.fromAccount]?.relation || []) {
+      const id = compactId(relation.id);
+      changes.set(id, (changes.get(id) || 0) - amount);
+    }
+    for (const relation of row.properties?.[ALC.toAccount]?.relation || []) {
+      const id = compactId(relation.id);
+      changes.set(id, (changes.get(id) || 0) + amount);
+    }
+  }
+  return changes;
+}
+
+async function accountBalanceFromPage(env, page, accountChanges) {
+  const changes = accountChanges || await accountAllocationChanges(env);
+  return (await exactNumber(env, page, ACC.balance)) +
+    (changes.get(compactId(page.id)) || 0);
 }
 
 async function findMainAccount(env) {
@@ -5085,7 +5275,13 @@ const listAssets = (env) =>
   );
 
 async function listCategories(env, includeInactive = false) {
-  const rows = await queryDb(env, "categories");
+  const rows = await queryDb(env, "categories", {
+    limit: Number.MAX_SAFE_INTEGER,
+  });
+  const orderField = Object.keys(rows[0]?.properties || {}).find((name) =>
+    /ترتیب/.test(name),
+  );
+  sortNamedPages(rows, CAT.title, orderField);
   return rows
     .filter((p) => includeInactive || propCheckbox(p, CAT.active) !== false)
     .map((p) => {
@@ -5103,6 +5299,35 @@ async function listCategories(env, includeInactive = false) {
       };
     })
     .filter((x) => x.name);
+}
+
+const nameCollator = new Intl.Collator("fa", {
+  numeric: true,
+  sensitivity: "base",
+});
+
+function pageOrder(page, field) {
+  const value = field && propPlain(page.properties?.[field]);
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(toEnDigits(value));
+  return Number.isFinite(number) ? number : null;
+}
+
+function sortNamedPages(rows, titleField, orderField = null) {
+  return rows.sort((left, right) => {
+    const leftOrder = pageOrder(left, orderField);
+    const rightOrder = pageOrder(right, orderField);
+    if (leftOrder !== null || rightOrder !== null) {
+      if (leftOrder === null) return 1;
+      if (rightOrder === null) return -1;
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+    }
+    const leftName = propTitle(left, titleField) || pageTitle(left);
+    const rightName = propTitle(right, titleField) || pageTitle(right);
+    return nameCollator.compare(leftName, rightName) ||
+      String(left.created_time || "").localeCompare(String(right.created_time || "")) ||
+      String(left.id).localeCompare(String(right.id));
+  });
 }
 
 async function categoryDescendants(env, categoryId) {
