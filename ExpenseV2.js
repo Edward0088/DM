@@ -4077,6 +4077,7 @@ function reportTableMenu(env, chatId, msg) {
   const rows = [
     [btn("— 🧾 فعالیت‌های مالی —", "m:noop")],
     [btn("💳 تراکنش‌ها", "r:t:t"), btn("🎯 تخصیص‌ها", "r:t:l")],
+    [btn("📊 هزینه‌های ماهانه بر اساس دسته‌بندی", "r:ec")],
     [btn("— 🏦 حساب‌ها و دارایی‌ها —", "m:noop")],
     [btn("🏦 حساب‌ها", "r:t:a"), btn("📦 باکس‌ها", "r:t:b")],
     [btn("💎 دارایی‌ها", "r:t:s"), btn("🏷 دسته‌بندی‌ها", "r:t:c")],
@@ -4093,6 +4094,12 @@ function reportTableMenu(env, chatId, msg) {
 
 async function handleReportCallback(env, msg, action, args) {
   const chatId = msg.chat.id;
+
+  if (action === "ec") {
+    const st = { flow: "report", ent: "t", expenseCategory: true, range: null };
+    await setState(env, chatId, st);
+    return expenseCategoryMonthMenu(env, msg);
+  }
 
   if (action === "t") {
     const e = args[0];
@@ -4152,12 +4159,14 @@ async function handleReportCallback(env, msg, action, args) {
       st.range =
         cm.m === 1 ? jMonthRange(cm.y - 1, 12) : jMonthRange(cm.y, cm.m - 1);
     await setState(env, chatId, st);
+    if (st.expenseCategory) return reportFormatMenu(env, chatId, msg, st);
     return afterRange(env, chatId, msg, st);
   }
 
   if (action === "m") {
     st.range = jMonthRange(Number(args[0]), Number(args[1]));
     await setState(env, chatId, st);
+    if (st.expenseCategory) return reportFormatMenu(env, chatId, msg, st);
     return afterRange(env, chatId, msg, st);
   }
 
@@ -4167,7 +4176,14 @@ async function handleReportCallback(env, msg, action, args) {
     return reportFormatMenu(env, chatId, msg, st);
   }
   if (action === "f")
-    return runReport(env, chatId, msg, st, st.mode || "detail", args[0]);
+    return runReport(
+      env,
+      chatId,
+      msg,
+      st,
+      st.expenseCategory ? "expensecat" : st.mode || "detail",
+      args[0],
+    );
 }
 
 function rangeMenu(env, chatId, msg, st) {
@@ -4210,7 +4226,27 @@ function monthPicker(env, msg) {
   });
 }
 
+function expenseCategoryMonthMenu(env, msg) {
+  return editPanel(
+    env,
+    msg,
+    "📅 <b>گزارش هزینه‌ها بر اساس دسته‌بندی</b>\nماه موردنظر را انتخاب کن:",
+    {
+      inline_keyboard: [
+        [btn("🗓 این ماه", "r:g:thism"), btn("🗓 ماه قبل", "r:g:lastm")],
+        [btn("📆 انتخاب ماه", "r:g:pick")],
+        [btn("🔙 گزارش‌ساز", "m:csv")],
+      ],
+    },
+  );
+}
+
 async function afterRange(env, chatId, msg, st) {
+  if (st.expenseCategory) {
+    st.mode = "expensecat";
+    await setState(env, chatId, st);
+    return reportFormatMenu(env, chatId, msg, st);
+  }
   if (st.ent === "all") {
     st.mode = "detail";
     await setState(env, chatId, st);
@@ -4238,6 +4274,19 @@ async function afterRange(env, chatId, msg, st) {
 function reportFormatMenu(env, chatId, msg, st) {
   const title = st.ent === "all" ? "همه‌ی بخش‌ها" : ENT[st.ent].fa;
   const step = st.ent === "all" ? "۳" : ENT[st.ent].date ? "۴" : "۲";
+  if (st.expenseCategory)
+    return panel(
+      env,
+      chatId,
+      msg,
+      `📎 <b>قالب گزارش هزینه‌ها</b>\n${rangeLabel(st.range)}\n\nنمودار دسته‌بندی‌ها را به‌صورت PDF دریافت کن:`,
+      {
+        inline_keyboard: [
+          [btn("📄 دریافت گزارش PDF", "r:f:pdf")],
+          [btn("🔙 انتخاب ماه", "r:ec"), btn("🏠 منو", "m:home")],
+        ],
+      },
+    );
   return panel(
     env,
     chatId,
@@ -4261,7 +4310,9 @@ async function runReport(env, chatId, msg, st, mode, format = "csv") {
   for (const e of list) {
     try {
       const r =
-        mode === "detail"
+        mode === "expensecat"
+          ? await buildExpenseCategoryReport(env, st.range)
+          : mode === "detail"
           ? await buildDetail(env, e, st.range)
           : await buildSummary(env, e, st.range, mode);
       if (!r.count) continue;
@@ -4274,7 +4325,7 @@ async function runReport(env, chatId, msg, st, mode, format = "csv") {
           chatId,
           filename,
           pdf,
-          `${ENT[e].icon} ${ENT[e].fa} — ${label} — ${r.count} ردیف`,
+          r.title || `${ENT[e].icon} ${ENT[e].fa} — ${label} — ${r.count} ردیف`,
           "application/pdf",
         );
       } else {
@@ -4529,6 +4580,70 @@ async function buildDetail(env, e, range) {
   };
 }
 
+async function buildExpenseCategoryReport(env, range) {
+  if (!range) throw new Error("ماه گزارش انتخاب نشده است");
+  const schema = await getSchema(env, "transactions");
+  const pages = await queryDb(env, "transactions", {
+    filter: {
+      and: [
+        { property: TX.type, select: { equals: "هزینه" } },
+        { property: TX.status, select: { equals: "ثبت‌شده" } },
+        { property: TX.date, date: { on_or_after: range.start } },
+        { property: TX.date, date: { on_or_before: range.end } },
+      ],
+    },
+    sorts: [{ property: TX.date, direction: "ascending" }],
+    limit: MAX_EXPORT_ROWS,
+  });
+  const rel = await relationMap(env, schema, pages);
+  const totals = new Map();
+  let total = 0;
+  for (const page of pages) {
+    const amount = propNumber(page, TX.amount);
+    total += amount;
+    const ids = [
+      ...new Set(
+        (page.properties?.[TX.category]?.relation || []).map((item) =>
+          compactId(item.id),
+        ),
+      ),
+    ];
+    const categories = ids.length
+      ? ids.map((id) => rel.get(id) || "بدون دسته‌بندی")
+      : ["بدون دسته‌بندی"];
+    const baseShare = Math.floor(amount / categories.length);
+    let remainder = amount - baseShare * categories.length;
+    for (const name of categories) {
+      const share = baseShare + (remainder-- > 0 ? 1 : 0);
+      totals.set(name, (totals.get(name) || 0) + share);
+    }
+  }
+  const rows = [...totals.entries()]
+    .map(([name, amount]) => ({ name, amount }))
+    .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name, "fa"));
+  const lines = [csvLine(["دسته‌بندی", "هزینه (تومان)", "سهم از کل (%)"])];
+  for (const row of rows)
+    lines.push(
+      csvLine([
+        row.name,
+        tomanPlain(row.amount),
+        total ? ((row.amount / total) * 100).toFixed(1) : "0.0",
+      ]),
+    );
+  lines.push(csvLine(["جمع کل هزینه‌ها", tomanPlain(total), total ? "100.0" : "0.0"]));
+  return {
+    filename: `monthly_expenses_by_category_${rangeTag(range)}.csv`,
+    csv: "\uFEFF" + lines.join("\r\n"),
+    count: rows.length,
+    title: `گزارش هزینه‌ها بر اساس دسته‌بندی — ${rangeLabel(range)}`,
+    chartData: rows.map((row) => ({
+      label: row.name,
+      amount: tomanPlain(row.amount),
+      percent: total ? (row.amount / total) * 100 : 0,
+    })),
+  };
+}
+
 async function buildSummary(env, e, range, mode) {
   const ent = ENT[e];
   const g = ent.groups[mode];
@@ -4724,6 +4839,28 @@ const PDF_DETAIL_COLUMNS = {
 
 function preparePdfReport(report, ent, mode) {
   const rows = parseCsvRows(report.csv);
+  if (mode === "expensecat") {
+    const header = rows.shift() || [];
+    return {
+      ...report,
+      csv:
+        "\uFEFF" +
+        [
+          header,
+          ...rows.map((row) =>
+            row.map((value, index) =>
+              /\(تومان\)\s*$/.test(header[index] || "")
+                ? formatPdfToman(value)
+                : index === 2
+                  ? fa(value)
+                  : value,
+            ),
+          ),
+        ]
+          .map(csvLine)
+          .join("\r\n"),
+    };
+  }
   const header = rows.shift() || [];
   const allowed = new Set(PDF_DETAIL_COLUMNS[ent.key] || []);
   const kept = header
@@ -4771,8 +4908,22 @@ function reportHtml(report, ent, label, fonts = null) {
   const head = rows.shift() || [];
   const th = head.map((x) => `<th>${htmlEsc(x)}</th>`).join("");
   const body = rows
-    .map((r) => `<tr>${r.map((x) => `<td>${htmlEsc(x)}</td>`).join("")}</tr>`)
+    .map((r) => {
+      const totalRow = r[0] === "جمع کل هزینه‌ها";
+      return `<tr${totalRow ? ' class="total"' : ""}>${r.map((x) => `<td>${htmlEsc(x)}</td>`).join("")}</tr>`;
+    })
     .join("");
+  const barColors = [
+    "#0ea5e9", "#6366f1", "#8b5cf6", "#ec4899", "#f97316", "#14b8a6",
+  ];
+  const chart = report.chartData?.length
+    ? `<section class="chart"><h2>هزینه‌ی هر دسته‌بندی</h2><div class="chart-rows">${report.chartData
+        .map((item, index) => {
+          const width = Math.max(0, Math.min(100, Number(item.percent) || 0));
+          return `<div class="chart-row"><div class="chart-label">${htmlEsc(item.label)}</div><div class="chart-track"><div class="chart-bar" style="width:${width}%;background:${barColors[index % barColors.length]}"></div></div><div class="chart-value">${formatPdfToman(item.amount)} <small>تومان</small></div></div>`;
+        })
+        .join("")}</div></section>`
+    : "";
   const fontFaces = fonts
     ? `@font-face{font-family:ShabnamFD;src:url('${fonts.regular}') format('woff2');font-style:normal;font-weight:400} @font-face{font-family:ShabnamFD;src:url('${fonts.bold}') format('woff2');font-style:normal;font-weight:700}`
     : "";
@@ -4780,10 +4931,11 @@ function reportHtml(report, ent, label, fonts = null) {
     ${fontFaces}
     @page{size:A4 landscape;margin:14mm}*{box-sizing:border-box}body{font-family:ShabnamFD,Tahoma,Arial,sans-serif;color:#172033;margin:0;direction:rtl;font-size:11px}
     .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;padding:0 0 12px;border-bottom:2px solid #dbe6f1}.title{font-size:22px;font-weight:700;color:#163b65}.meta{font-size:11px;color:#64748b;background:#f1f5f9;border-radius:8px;padding:6px 10px}
-    table{width:100%;border-collapse:collapse;font-size:10px;direction:rtl}thead{display:table-header-group}th{background:#163b65;color:#fff;font-weight:700}th,td{border:1px solid #d9e2ec;padding:7px;text-align:right;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere}tr:nth-child(even) td{background:#f4f7fb}tr{break-inside:avoid}
+    .chart{margin:0 0 18px;padding:14px 16px;border:1px solid #dbe6f1;border-radius:12px;background:linear-gradient(135deg,#f8fbff,#eef6ff)}.chart h2{margin:0 0 12px;font-size:15px;color:#163b65}.chart-rows{display:grid;gap:7px}.chart-row{display:grid;grid-template-columns:minmax(100px,1.2fr) minmax(120px,4fr) minmax(105px,1fr);align-items:center;gap:10px;min-height:20px;break-inside:avoid}.chart-label{font-weight:700;color:#334155;overflow-wrap:anywhere}.chart-track{height:12px;background:#e2e8f0;border-radius:999px;overflow:hidden;direction:rtl}.chart-bar{height:100%;border-radius:999px;print-color-adjust:exact;-webkit-print-color-adjust:exact}.chart-value{direction:rtl;text-align:left;font-weight:700;color:#0f172a;white-space:nowrap}.chart-value small{font-size:9px;color:#64748b}
+    table{width:100%;border-collapse:collapse;font-size:10px;direction:rtl}thead{display:table-header-group}th{background:#163b65;color:#fff;font-weight:700}th,td{border:1px solid #d9e2ec;padding:7px;text-align:right;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere}tr:nth-child(even) td{background:#f4f7fb}tr{break-inside:avoid}.total td{background:#eaf2fa!important;font-weight:700;color:#163b65}
     .foot{margin-top:12px;padding-top:8px;border-top:1px solid #d9e2ec;font-size:9px;color:#64748b;display:flex;justify-content:space-between}
-  </style></head><body><div class="head"><div class="title">${htmlEsc(ent.icon)} گزارش ${htmlEsc(ent.fa)}</div><div class="meta">بازه: ${htmlEsc(label)}</div></div>
-  <table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table><div class="foot"><span>${htmlEsc(fa(report.count))} ردیف · مبالغ به تومان</span><span>قلم Shabnam FD · Saber Rastikerdar · SIL OFL 1.1</span></div></body></html>`;
+  </style></head><body><div class="head"><div class="title">${htmlEsc(report.title || `${ent.icon} گزارش ${ent.fa}`)}</div><div class="meta">بازه: ${htmlEsc(label)}</div></div>
+  ${chart}<table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table><div class="foot"><span>${htmlEsc(fa(report.count))} ردیف · مبالغ به تومان</span><span>قلم Shabnam FD · Saber Rastikerdar · SIL OFL 1.1</span></div></body></html>`;
 }
 
 let shabnamFdFontsPromise;
