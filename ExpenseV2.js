@@ -1910,9 +1910,13 @@ async function saveAllocation(env, d) {
       [TX.date]: { date: { start: d.date } },
       [TX.status]: selectProp("ثبت‌شده"),
     };
-    if (d.operation === "assign")
+    if (d.operation === "assign") {
       txProps[TX.fromAccount] = relationProp(d.fromAccount.id);
-    else txProps[TX.toAccount] = relationProp(d.toAccount.id);
+      txProps[TX.box] = relationProp(d.toBox.id);
+    } else {
+      txProps[TX.toAccount] = relationProp(d.toAccount.id);
+      txProps[TX.box] = relationProp(d.fromBox.id);
+    }
     await notion(env, "POST", "/pages", {
       parent: { database_id: dbId(env, "transactions") },
       properties: txProps,
