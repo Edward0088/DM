@@ -4427,6 +4427,8 @@ async function buildDetail(env, e, range) {
       (p) => p.type !== "title" && p.type !== "files" && !isHiddenField(e, p),
     ),
   ];
+  if (e === "s")
+    cols = cols.filter((p) => p.name !== AST.symbol && p.name !== AST.value);
   const assetCategoryColumn =
     e === "s" ? cols.find((p) => p.name === AST.category) : null;
   if (assetCategoryColumn)
@@ -4440,6 +4442,14 @@ async function buildDetail(env, e, range) {
         isMoneyField(e, p.name) &&
         (p.type === "rollup" || p.type === "formula"),
     );
+    if (e === "s") {
+      const marketValue = schema.props.find((p) => p.name === AST.value);
+      if (
+        marketValue &&
+        ["rollup", "formula"].includes(marketValue.type) &&
+        !need.some((p) => p.name === marketValue.name)
+      ) need.push(marketValue);
+    }
     const jobs = [];
     for (const pg of pages)
       for (const p of need) {
@@ -4471,8 +4481,10 @@ async function buildDetail(env, e, range) {
   if (e === "s") {
     header.push(...ASSET_PURCHASE_REPORT_COLUMNS.map((column) => column.name));
     if (assetCategoryColumn) header.push(assetCategoryColumn.name);
+    header.push("مجموع ارزش همه دارایی‌ها (تومان)");
   }
   const lines = [csvLine(header)];
+  let assetTotal = 0;
   for (const pg of pages) {
     const cells = cols.map((p) => {
       const money = isMoneyField(e, p.name);
@@ -4498,9 +4510,19 @@ async function buildDetail(env, e, range) {
       );
       if (assetCategoryColumn)
         cells.push(cellText(pg, assetCategoryColumn, { rel, csv: true }));
+      assetTotal += exact.get(`${pg.id}|${AST.value}`) ?? propNumber(pg, AST.value);
+      cells.push("");
     }
     lines.push(csvLine(cells));
   }
+  if (e === "s")
+    lines.push(
+      csvLine([
+        "جمع کل دارایی‌ها",
+        ...Array(header.length - 2).fill(""),
+        tomanPlain(assetTotal),
+      ]),
+    );
   return {
     filename: ent.key + "_detail_" + rangeTag(ent.date ? range : null) + ".csv",
     csv: "\uFEFF" + lines.join("\r\n"),
@@ -4689,16 +4711,15 @@ const PDF_DETAIL_COLUMNS = {
   assets: [
     AST.title,
     AST.type,
-    AST.symbol,
     AST.unit,
     AST.qty,
     AST.price,
-    AST.value,
     "تاریخ خرید",
     "ارزش دارایی هنگام خرید",
     "مبلغ خرید",
     "قیمت تمام‌شده هر واحد",
     AST.category,
+    "مجموع ارزش همه دارایی‌ها",
   ],
 };
 
