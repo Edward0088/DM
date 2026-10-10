@@ -340,7 +340,15 @@ async function handleUpdate(update, env) {
 
 async function handleText(msg, env) {
   try {
-    return await handleTextMessage(msg, env);
+    const isCommand = msg.text.trim().startsWith("/");
+    const previousState = isCommand ? null : await getState(env, msg.chat.id);
+    const result = await handleTextMessage(msg, env);
+    if (previousState) {
+      const currentState = await getState(env, msg.chat.id);
+      if (JSON.stringify(previousState) === JSON.stringify(currentState))
+        await repeatExpectedInput(env, msg.chat.id, previousState);
+    }
+    return result;
   } finally {
     await tg(env, "deleteMessage", {
       chat_id: msg.chat.id,
@@ -382,7 +390,7 @@ async function handleTextMessage(msg, env) {
   const state = await getState(env, chatId);
   if (state && acceptsTextInput(state)) {
     await cleanupMessages(env, chatId, msg.message_id).catch(() => {});
-  } else {
+  } else if (!state) {
     await clearActiveMenus(env, chatId, null, { deleteMenus: !state }).catch(
       () => {},
     );
@@ -537,8 +545,74 @@ async function handleTextMessage(msg, env) {
   return send(
     env,
     chatId,
-    "برای ادامه از دکمه‌های همان پیام استفاده کن، یا /cancel را بزن.",
+    "❌ این مرحله ورودی متنی نمی‌گیرد. لطفاً گزینه‌ی مناسب را از منوی زیر انتخاب کن؛ پیام اشتباهت پاک شد.",
   );
+}
+
+async function repeatExpectedInput(env, chatId, state) {
+  const prompt = (text, placeholder = "") =>
+    send(env, chatId, text, {
+      reply_markup: { force_reply: true, input_field_placeholder: placeholder },
+    });
+
+  if (state.flow === "tx") {
+    if (state.step === "title")
+      return prompt("عنوان تراکنش را وارد کن؛ مثلاً «خرید هفتگی» یا «حقوق مهرماه».", "مثلاً خرید هفتگی");
+    if (state.step === "amount-input")
+      return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
+    if (state.step === "assetQty")
+      return prompt("مقدار دارایی را به‌صورت عدد وارد کن؛ مثلاً <code>۰٫۵</code>.", "مثلاً ۰٫۵");
+    if (state.step === "description-input")
+      return panel(env, chatId, null, "توضیح را بنویس یا برای رد کردن از دکمه استفاده کن.", {
+        inline_keyboard: [[btn("⏭ رد کردن توضیحات", "tx:desc-skip")], [btn("❌ لغو", "tx:cancel")]],
+      });
+    if (["amount-choice", "amount-unit"].includes(state.step))
+      return showMoneyUnitChoice(env, chatId, null, "tx", "tx:cancel");
+  }
+  if (state.flow === "allocation") {
+    if (state.step === "amount-input")
+      return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
+    if (["amount-unit", "amount-choice"].includes(state.step))
+      return showMoneyUnitChoice(env, chatId, null, "al", "al:cancel");
+    if (state.step === "percent-input")
+      return prompt("درصد را از ۱ تا ۱۰۰ وارد کن؛ مثلاً <code>۲۵</code>.", "مثلاً ۲۵");
+    if (state.step === "amount")
+      return prompt("مبلغ را به تومان وارد کن؛ فقط عدد بفرست.", "مثلاً ۵۰۰۰۰۰");
+  }
+  if (state.flow === "asset-sale") {
+    if (state.step === "quantity")
+      return prompt(`مقدار فروخته‌شده را تا حداکثر ${fa(state.asset.qty)} وارد کن.`, "مثلاً ۱");
+    if (["base-price", "proceeds"].includes(state.step))
+      return prompt(state.step === "base-price" ? "قیمت پایه‌ی هر واحد را به تومان وارد کن:" : "مبلغ کل فروخته‌شده را به تومان وارد کن:", "مبلغ به تومان");
+    if (state.step === "destination")
+      return send(env, chatId, "لطفاً مقصد واریز را از گزینه‌های نمایش‌داده‌شده انتخاب کن.");
+  }
+  if (state.flow === "new" && state.assetFlow) {
+    if (state.assetStep === "title")
+      return prompt("عنوان دارایی را وارد کن؛ مثلاً «دلار» یا «طلای ۱۸ عیار».", "مثلاً دلار");
+    if (state.assetStep === "description")
+      return panel(env, chatId, null, "توضیحات دارایی را وارد کن یا برای رد کردن، «-» بفرست.", {
+        inline_keyboard: [[btn("⏭ رد کردن توضیحات", "x:assetdescskip")], [btn("❌ لغو", "x:x")]],
+      });
+    if (["price-input", "cost-input"].includes(state.assetStep))
+      return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
+    if (state.assetStep === "quantity")
+      return prompt("مقدار دارایی را به‌صورت عدد وارد کن؛ مثلاً <code>۰٫۵</code>.", "مثلاً ۰٫۵");
+    if (["cost-unit", "price-unit"].includes(state.assetStep))
+      return showMoneyUnitChoice(env, chatId, null, "x", "x:x");
+    return send(env, chatId, "لطفاً گزینه‌ی مناسب را از منوی نمایش‌داده‌شده انتخاب کن.");
+  }
+  if (state.flow === "edit" || state.flow === "new") {
+    if (state.step === "money-input")
+      return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
+    if (state.step === "text")
+      return prompt("مقدار این فیلد را وارد کن یا برای خالی گذاشتن «-» بفرست.");
+    if (state.step === "rel")
+      return send(env, chatId, "برای جست‌وجوی مورد مرتبط، نامش را وارد کن.");
+  }
+  if (state.flow === "report" && state.step === "range")
+    return prompt("بازه‌ی گزارش را وارد کن؛ مثلاً <code>۱۴۰۵/۰۷</code> یا <code>۱۴۰۵/۰۷/۰۱ تا ۱۴۰۵/۰۷/۱۵</code>.");
+  return send(env, chatId, "لطفاً گزینه‌ی مناسب را از منوی فعال انتخاب کن.");
 }
 
 function acceptsTextInput(state) {
