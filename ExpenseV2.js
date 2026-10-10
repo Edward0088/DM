@@ -1876,8 +1876,13 @@ async function handleCrud(env, msg, action, args) {
   if (action === "v") return showItem(env, chatId, msg, args[0], args[1]);
 
   if (action === "charge") {
-    const account = (await listAccounts(env)).find((x) => idEq(x.id, args[0]));
-    if (!account) return listEntity(env, chatId, msg, "a", 0);
+    const entity = args.length > 1 ? args[0] : "a";
+    const id = args.length > 1 ? args[1] : args[0];
+    const target = entity === "b"
+      ? (await listBoxes(env)).find((x) => idEq(x.id, id))
+      : (await listAccounts(env)).find((x) => idEq(x.id, id));
+    if (!target) return listEntity(env, chatId, msg, entity === "b" ? "b" : "a", 0);
+    const targetName = entity === "b" ? "باکس" : "حساب";
     await setState(env, chatId, {
       flow: "tx",
       step: "title",
@@ -1885,15 +1890,15 @@ async function handleCrud(env, msg, action, args) {
         type: "درآمد",
         status: "ثبت‌شده",
         currency: DEFAULT_CURRENCY,
-        toAccount: account,
+        ...(entity === "b" ? { box: target } : { toAccount: target }),
         skipBox: true,
         accountCharge: true,
       },
     });
-    await editPanel(env, msg, `💰 شارژ حساب «${esc(account.name)}»`, {
+    await editPanel(env, msg, `💰 شارژ ${targetName} «${esc(target.name)}»`, {
       inline_keyboard: [[btn("❌ لغو", "tx:cancel")]],
     });
-    return send(env, chatId, `📝 عنوان این درآمد را وارد کن؛ این تراکنش مستقیماً به حساب «${esc(account.name)}» اضافه می‌شود و عنوانش در سوابق حساب دیده خواهد شد.\nمثلاً: <code>حقوق مهرماه</code>`, {
+    return send(env, chatId, `📝 عنوان این درآمد را وارد کن؛ این تراکنش مستقیماً به ${targetName} «${esc(target.name)}» اضافه می‌شود و عنوانش در سوابق آن دیده خواهد شد.\nمثلاً: <code>واریز به ${targetName}</code>`, {
       reply_markup: { force_reply: true, input_field_placeholder: "مثلاً واریز حقوق" },
     });
   }
@@ -2438,9 +2443,12 @@ async function showItem(env, chatId, msg, e, id, note = "") {
       : `x:l:${e}:0`;
   const kb = {
     inline_keyboard: [
-      ...(e === "a" ? [[btn("💰 شارژ حساب", `x:charge:${cid}`)]] : []),
+      ...(e === "a" ? [[btn("💰 شارژ حساب", `x:charge:a:${cid}`)]] : []),
       ...(e === "s" ? [[btn("📉 فروش این دارایی", `as:start:${cid}`)]] : []),
-      ...(e === "b" ? [[btn("➕ افزودن باکس جدید", "x:n:b")]] : []),
+      ...(e === "b" ? [
+        [btn("💰 شارژ باکس", `x:charge:b:${cid}`)],
+        [btn("➕ افزودن باکس جدید", "x:n:b")],
+      ] : []),
       [btn("✏️ ویرایش", `x:e:${e}:${cid}`), btn("🗑 حذف", `x:d:${e}:${cid}`)],
       [btn("🔙 فهرست", backToList), btn("🏠 منو", "m:home")],
     ],
