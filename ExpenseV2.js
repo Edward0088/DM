@@ -2274,16 +2274,19 @@ async function handleCrud(env, msg, action, args) {
 async function listEntity(env, chatId, msg, e, page = 0) {
   if (e === "c") return listCategoryRoots(env, chatId, msg, page);
   const ent = ENT[e];
-  const sorts = ent.date
-    ? [
-        { property: ent.date, direction: "descending" },
-        { timestamp: "created_time", direction: "descending" },
-      ]
-    : [{ timestamp: "created_time", direction: "ascending" }];
-  const rows = await queryDb(env, ent.key, {
-    sorts,
-    limit: (page + 1) * PAGE_SIZE + 1,
-  });
+  const rows = ent.date
+    ? await queryDb(env, ent.key, {
+        sorts: [
+          { property: ent.date, direction: "descending" },
+          { timestamp: "created_time", direction: "descending" },
+        ],
+        limit: (page + 1) * PAGE_SIZE + 1,
+      })
+    : sortNamedPages(
+        await queryDb(env, ent.key, { limit: Number.MAX_SAFE_INTEGER }),
+        ent.title,
+        e === "b" ? BOX.order : null,
+      );
   const hasNext = rows.length > (page + 1) * PAGE_SIZE;
   const slice = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const accountChanges = e === "a" ? await accountAllocationChanges(env) : null;
@@ -3586,8 +3589,14 @@ async function relOptions(env, p, search) {
     search && schema.titleName
       ? { property: schema.titleName, title: { contains: search } }
       : undefined;
-  const rows = await queryDbById(env, p.relDb, { filter, limit: 40 });
-  return rows
+  const rows = await queryDbById(env, p.relDb, {
+    filter,
+    sorts: schema.titleName
+      ? [{ property: schema.titleName, direction: "ascending" }]
+      : undefined,
+    limit: 40,
+  });
+  return sortNamedPages(rows, schema.titleName)
     .map((r) => ({ id: r.id, name: pageTitle(r) }))
     .filter((x) => x.name);
 }
@@ -4910,7 +4919,11 @@ async function getSchema(env, key) {
 }
 
 async function namedRows(env, key, titleField, pred = () => true) {
-  const rows = await queryDb(env, key);
+  const rows = sortNamedPages(
+    await queryDb(env, key, { limit: Number.MAX_SAFE_INTEGER }),
+    titleField,
+    key === "boxes" ? BOX.order : null,
+  );
   return rows
     .filter(pred)
     .map((p) => ({ id: p.id, name: propTitle(p, titleField) }))
@@ -5028,7 +5041,13 @@ const listAssets = (env) =>
   );
 
 async function listCategories(env, includeInactive = false) {
-  const rows = await queryDb(env, "categories");
+  const rows = await queryDb(env, "categories", {
+    limit: Number.MAX_SAFE_INTEGER,
+  });
+  const orderField = Object.keys(rows[0]?.properties || {}).find((name) =>
+    /ترتیب/.test(name),
+  );
+  sortNamedPages(rows, CAT.title, orderField);
   return rows
     .filter((p) => includeInactive || propCheckbox(p, CAT.active) !== false)
     .map((p) => {
@@ -5046,6 +5065,35 @@ async function listCategories(env, includeInactive = false) {
       };
     })
     .filter((x) => x.name);
+}
+
+const nameCollator = new Intl.Collator("fa", {
+  numeric: true,
+  sensitivity: "base",
+});
+
+function pageOrder(page, field) {
+  const value = field && propPlain(page.properties?.[field]);
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(toEnDigits(value));
+  return Number.isFinite(number) ? number : null;
+}
+
+function sortNamedPages(rows, titleField, orderField = null) {
+  return rows.sort((left, right) => {
+    const leftOrder = pageOrder(left, orderField);
+    const rightOrder = pageOrder(right, orderField);
+    if (leftOrder !== null || rightOrder !== null) {
+      if (leftOrder === null) return 1;
+      if (rightOrder === null) return -1;
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+    }
+    const leftName = propTitle(left, titleField) || pageTitle(left);
+    const rightName = propTitle(right, titleField) || pageTitle(right);
+    return nameCollator.compare(leftName, rightName) ||
+      String(left.created_time || "").localeCompare(String(right.created_time || "")) ||
+      String(left.id).localeCompare(String(right.id));
+  });
 }
 
 async function categoryDescendants(env, categoryId) {
