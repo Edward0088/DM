@@ -1553,6 +1553,8 @@ async function startAllocation(env, msg) {
 
 async function handleAllocationCallback(env, msg, action, args) {
   const chatId = msg.chat.id;
+  if (action === "start-box")
+    return startBoxAllocation(env, msg, args[0]);
   const state = await getState(env, chatId);
 
   if (action === "cancel") {
@@ -1665,6 +1667,11 @@ async function handleAllocationCallback(env, msg, action, args) {
           `🏦 «${esc(account.name)}» موجودی قابل انتقال ندارد.`,
           backHome(),
         );
+      if (state.draft.toBox) {
+        state.step = "amount-unit";
+        await setState(env, chatId, state);
+        return showMoneyUnitChoice(env, chatId, msg, "al", "al:cancel");
+      }
       state.step = "to-box";
       await setState(env, chatId, state);
       return allocationChooseBox(env, msg, "to", null, state.maxAmount);
@@ -1769,6 +1776,36 @@ async function handleAllocationCallback(env, msg, action, args) {
       ],
     });
   }
+}
+
+async function startBoxAllocation(env, msg, boxId) {
+  const chatId = msg.chat.id;
+  try {
+    await ensureAllocationAccountSchema(env);
+  } catch (e) {
+    return editPanel(
+      env,
+      msg,
+      `❌ مدل تخصیص حساب ↔ باکس آماده نشد: ${esc(e.message)}\nدسترسی اتصال Notion به پایگاه‌داده حساب‌ها و تخصیص‌ها را بررسی کن.`,
+      backHome(),
+    );
+  }
+  const target = (await listBoxes(env)).find((box) => idEq(box.id, boxId));
+  if (!target)
+    return editPanel(env, msg, "این باکس پیدا نشد یا دیگر در دسترس نیست.", {
+      inline_keyboard: [[btn("🔙 فهرست باکس‌ها", "x:l:b:0")]],
+    });
+  await setState(env, chatId, {
+    flow: "allocation",
+    step: "from-account",
+    draft: {
+      operation: "assign",
+      toBox: target,
+      date: todayTehran(),
+      status: "ثبت‌شده",
+    },
+  });
+  return allocationChooseAccount(env, msg, "from-account");
 }
 
 async function allocationChooseBox(env, msg, role, exclude, available = null) {
@@ -2520,7 +2557,7 @@ async function showItem(env, chatId, msg, e, id, note = "") {
       ...(e === "a" ? [[btn("💰 شارژ حساب", `x:charge:a:${cid}`)]] : []),
       ...(e === "s" ? [[btn("📉 فروش این دارایی", `as:start:${cid}`)]] : []),
       ...(e === "b" ? [
-        [btn("💰 شارژ باکس", `x:charge:b:${cid}`)],
+        [btn("💰 شارژ باکس", `al:start-box:${cid}`)],
         [btn("➕ افزودن باکس جدید", "x:n:b")],
       ] : []),
       [btn("✏️ ویرایش", `x:e:${e}:${cid}`), btn("🗑 حذف", `x:d:${e}:${cid}`)],
