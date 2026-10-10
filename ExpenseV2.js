@@ -677,6 +677,7 @@ async function handleMenu(env, msg, action) {
     categories: "c",
   };
   if (listMap[action]) return listEntity(env, chatId, msg, listMap[action], 0);
+  if (action === "newasset") return startNewAsset(env, chatId, msg);
   if (action === "assetpricesrefresh")
     marketPriceCache = { expiresAt: 0, text: null };
   if (action === "assetprices" || action === "assetpricesrefresh")
@@ -779,7 +780,8 @@ function mainMenuKeyboard() {
         btn("💳 تراکنش", "m:transactions"),
         btn("🎯 تخصیص منابع", "m:allocations"),
       ],
-      [btn("💎 دارایی‌ها", "m:assets"), btn("🏷 دسته‌بندی‌ها", "m:categories")],
+      [btn("💎 دارایی‌ها", "m:assets"), btn("➕ افزودن دارایی", "m:newasset")],
+      [btn("🏷 دسته‌بندی‌ها", "m:categories")],
       [btn("📊 داشبورد مالی", "m:report"), btn("📤 دریافت گزارش", "m:csv")],
       [btn("⚙️ وضعیت سرویس‌ها", "m:check"), btn("📖 راهنما", "m:help")],
     ],
