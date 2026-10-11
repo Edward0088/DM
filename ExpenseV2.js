@@ -4,7 +4,7 @@
 //   TELEGRAM_TOKEN, NOTION_TOKEN, WEBHOOK_SECRET
 //   ALLOWED_USER_ID            (الزامی؛ آیدی عددی تلگرام، چند آیدی با کاما)
 //   NOTION_TRANSACTIONS_DB_ID, NOTION_ACCOUNTS_DB_ID, NOTION_CATEGORIES_DB_ID,
-//   NOTION_BOXES_DB_ID, NOTION_ALLOCATIONS_DB_ID, NOTION_ASSETS_DB_ID, NOTION_GOALS_DB_ID
+//   NOTION_BOXES_DB_ID, NOTION_ALLOCATIONS_DB_ID, NOTION_ASSETS_DB_ID
 //   DB                         (D1 binding برای ذخیره‌ی وضعیت مکالمه‌ها)
 //   BOT_API_BASE               (اختیاری)
 //   BROWSER                    (اختیاری؛ Browser Rendering binding برای PDF)
@@ -32,11 +32,10 @@ const DB = {
   boxes: "NOTION_BOXES_DB_ID",
   allocations: "NOTION_ALLOCATIONS_DB_ID",
   assets: "NOTION_ASSETS_DB_ID",
-  goals: "NOTION_GOALS_DB_ID",
 };
 
 const TX = {
-  title: "تراکنش",
+  title: "عنوان",
   type: "نوع",
   amount: "مبلغ",
   currency: "ارز",
@@ -44,7 +43,8 @@ const TX = {
   fromAccount: "از حساب",
   toAccount: "به حساب",
   category: "دسته‌بندی",
-  box: "باکس",
+  fromBox: "از باکس",
+  toBox: "به باکس",
   asset: "دارایی",
   assetQty: "مقدار دارایی",
   unitPrice: "قیمت واحد",
@@ -68,17 +68,17 @@ const CAT = {
   parent: "دسته مادر",
 };
 const BOX = {
-  title: "باکس",
+  title: "عنوان",
   code: "کد",
   order: "ترتیب",
-  balance: "مانده",
+  balance: "موجودی",
   active: "فعال",
   system: "سیستمی",
   incoming: "ورودی",
   outgoing: "خروجی",
 };
 const AST = {
-  title: "دارایی",
+  title: "عنوان",
   type: "نوع دارایی",
   symbol: "نماد",
   unit: "واحد",
@@ -100,9 +100,9 @@ const GOL = {
   priority: "اولویت",
 };
 const ALC = {
-  title: "تخصیص",
+  title: "عنوان",
   amount: "مبلغ",
-  date: "تاریخ",
+  date: "تاریخ تخصیص",
   fromBox: "از باکس",
   toBox: "به باکس",
   fromAccount: "از حساب",
@@ -164,12 +164,13 @@ const ENT = {
     icon: "💳",
     title: TX.title,
     date: TX.date,
-    money: [TX.amount, TX.unitPrice, TX.assetValueAtPurchase],
+    money: [TX.amount],
     groups: {
       day: { label: "📅 روزانه" },
       month: { label: "🗓 ماهانه" },
       category: { label: "🏷 دسته‌بندی", rel: TX.category },
-      box: { label: "📦 باکس", rel: TX.box },
+      fromBox: { label: "📦 از باکس", rel: TX.fromBox },
+      toBox: { label: "📦 به باکس", rel: TX.toBox },
     },
   },
   l: {
@@ -219,15 +220,7 @@ const ENT = {
     one: "دارایی",
     icon: "💎",
     title: AST.title,
-    money: [AST.price, AST.value],
-  },
-  g: {
-    key: "goals",
-    fa: "اهداف",
-    one: "هدف",
-    icon: "🏁",
-    title: GOL.title,
-    money: [GOL.target, GOL.allocated],
+    money: ["قیمت زمان خرید"],
   },
 };
 const ENT_ORDER = ["t", "l", "a", "b", "c", "s"];
@@ -399,10 +392,10 @@ async function handleTextMessage(msg, env) {
   }
   if (!state) return sendMainMenu(env, chatId, "از منوی زیر انتخاب کن 👇");
 
-  if (state.flow === "new" && state.assetFlow)
-    return handleAssetCreateText(env, chatId, state, text);
-  if (state.flow === "asset-sale")
-    return handleAssetSaleText(env, chatId, state, text);
+  if ((state.flow === "new" && state.assetFlow) || state.flow === "asset-sale") {
+    await clearState(env, chatId);
+    return sendMainMenu(env, chatId, "این عملیات با ساختار جدید دارایی‌ها سازگار نیست؛ از منوی دارایی‌ها دوباره شروع کن.");
+  }
 
   // ---- ثبت تراکنش ----
   if (state.flow === "tx" && state.step === "title") {
@@ -658,7 +651,7 @@ async function handleCallback(cq, env) {
   }).catch(() => {});
   if (ns === "m") return handleMenu(env, msg, action);
   if (ns === "tx") return handleTxCallback(env, msg, action, args);
-  if (ns === "as") return handleAssetSaleCallback(env, msg, action, args);
+  if (ns === "as") return editPanel(env, msg, "فروش دارایی با ساختار فعلی جدول پشتیبانی نمی‌شود.", backHome());
   if (ns === "al") return handleAllocationCallback(env, msg, action, args);
   if (ns === "x") return handleCrud(env, msg, action, args);
   if (ns === "r") return handleReportCallback(env, msg, action, args);
@@ -1513,7 +1506,6 @@ async function saveTransaction(env, d) {
     [TX.title]: titleProp(d.title),
     [TX.type]: selectProp(d.type),
     [TX.amount]: { number: d.amount },
-    [TX.currency]: selectProp(d.currency || DEFAULT_CURRENCY),
     [TX.date]: { date: { start: d.date } },
     [TX.status]: selectProp("ثبت‌شده"),
   };
@@ -1522,15 +1514,8 @@ async function saveTransaction(env, d) {
   if (d.toAccount && !boxReplacesAccount)
     props[TX.toAccount] = relationProp(d.toAccount.id);
   if (d.category) props[TX.category] = relationProp(d.category.id);
-  if (d.box) props[TX.box] = relationProp(d.box.id);
-  if (d.asset) props[TX.asset] = relationProp(d.asset.id);
-  if (d.assetQty) props[TX.assetQty] = { number: d.assetQty };
-  if (d.unitPrice) props[TX.unitPrice] = { number: d.unitPrice };
-  if (d.assetValueAtPurchase)
-    props[TX.assetValueAtPurchase] = { number: d.assetValueAtPurchase };
+  if (d.box) props[d.type === "درآمد" || d.type === "فروش دارایی" ? TX.toBox : TX.fromBox] = relationProp(d.box.id);
   if (d.desc) props[TX.desc] = richTextProp(d.desc);
-  if (TYPE_META[d.type].chart)
-    props[TX.chartGroup] = selectProp(TYPE_META[d.type].chart);
 
   const res = await notion(env, "POST", "/pages", {
     parent: { database_id: dbId(env, "transactions") },
@@ -1907,7 +1892,6 @@ async function saveAllocation(env, d) {
   const props = {
     [ALC.title]: titleProp(`${fromName} → ${toName}`),
     [ALC.amount]: { number: d.amount },
-    [ALC.date]: { date: { start: d.date } },
     [ALC.status]: selectProp("ثبت‌شده"),
   };
   if (d.operation === "assign") {
@@ -1927,16 +1911,15 @@ async function saveAllocation(env, d) {
       [TX.title]: titleProp(`${fromName} به ${toName}`),
       [TX.type]: selectProp("انتقال"),
       [TX.amount]: { number: d.amount },
-      [TX.currency]: selectProp(DEFAULT_CURRENCY),
       [TX.date]: { date: { start: d.date } },
       [TX.status]: selectProp("ثبت‌شده"),
     };
     if (d.operation === "assign") {
       txProps[TX.fromAccount] = relationProp(d.fromAccount.id);
-      txProps[TX.box] = relationProp(d.toBox.id);
+      txProps[TX.toBox] = relationProp(d.toBox.id);
     } else {
       txProps[TX.toAccount] = relationProp(d.toAccount.id);
-      txProps[TX.box] = relationProp(d.fromBox.id);
+      txProps[TX.fromBox] = relationProp(d.fromBox.id);
     }
     await notion(env, "POST", "/pages", {
       parent: { database_id: dbId(env, "transactions") },
@@ -2181,8 +2164,10 @@ async function handleCrud(env, msg, action, args) {
       backHome(),
     );
   }
-  if (st.flow === "new" && st.assetFlow)
-    return handleAssetCreateCallback(env, msg, st, action, args);
+  if (st.flow === "new" && st.assetFlow) {
+    await clearState(env, chatId);
+    return editPanel(env, msg, "ثبت دارایی را با ساختار جدید جدول دوباره شروع کن.", backHome());
+  }
   const schema = await getSchema(env, ENT[st.ent].key);
   const p = schema.props.find((x) => x.name === st.propName);
 
@@ -2296,10 +2281,12 @@ async function listEntity(env, chatId, msg, e, page = 0) {
   const ent = ENT[e];
   const rows = ent.date
     ? await queryDb(env, ent.key, {
-        sorts: [
-          { property: ent.date, direction: "descending" },
-          { timestamp: "created_time", direction: "descending" },
-        ],
+        sorts: e === "l"
+          ? [{ timestamp: "created_time", direction: "descending" }]
+          : [
+              { property: ent.date, direction: "descending" },
+              { timestamp: "created_time", direction: "descending" },
+            ],
         limit: (page + 1) * PAGE_SIZE + 1,
       })
     : sortNamedPages(
@@ -2500,7 +2487,7 @@ async function briefOf(env, e, p) {
   if (e === "s")
     return {
       icon: "💎",
-      text: `${fmt(await exactNumber(env, p, AST.value))} ت`,
+      text: `${fa(await exactNumber(env, p, "مقدار"))} ${propText(p, AST.unit) || "واحد"}`,
     };
   if (e === "g") {
     const target = propNumber(p, GOL.target);
@@ -2553,10 +2540,8 @@ async function showItem(env, chatId, msg, e, id, note = "") {
     TX.fromAccount,
     TX.toAccount,
     TX.category,
-    TX.box,
-    TX.asset,
-    TX.assetQty,
-    TX.unitPrice,
+    TX.fromBox,
+    TX.toBox,
     TX.desc,
   ]);
   for (const p of schema.props) {
@@ -2599,7 +2584,6 @@ async function showItem(env, chatId, msg, e, id, note = "") {
   const kb = {
     inline_keyboard: [
       ...(e === "a" ? [[btn("💰 شارژ حساب", `x:charge:a:${cid}`)]] : []),
-      ...(e === "s" ? [[btn("📉 فروش این دارایی", `as:start:${cid}`)]] : []),
       ...(e === "b" ? [
         [btn("💰 شارژ باکس", `al:start-box:${cid}`)],
         [btn("➕ افزودن باکس جدید", "x:n:b")],
@@ -2894,12 +2878,6 @@ async function setFieldValue(env, chatId, msg, st, payload, label) {
     await notion(env, "PATCH", `/pages/${st.pageId}`, {
       properties: { [st.propName]: payload },
     });
-    if (
-      st.ent === "t" &&
-      (st.propName === TX.amount || st.propName === TX.assetQty)
-    ) {
-      await recomputeUnitPrice(env, st.pageId);
-    }
     await clearState(env, chatId);
     return showItem(env, chatId, msg, st.ent, st.pageId, "✅ ذخیره شد.");
   }
@@ -3588,7 +3566,6 @@ function categoryFieldLabel(entity, property) {
 }
 
 async function startNew(env, chatId, msg, e) {
-  if (e === "s") return startNewAsset(env, chatId, msg);
   const schema = await getSchema(env, ENT[e].key);
   const st = {
     flow: "new",
@@ -3957,14 +3934,13 @@ async function showOverview(env, msg) {
     const nums = await Promise.all(act.map((p) => exactNumber(env, p, name)));
     return nums.reduce((a, b) => a + b, 0);
   };
-  const [cash, boxTotal, assetValue] = await Promise.all([
+  const [cash, boxTotal] = await Promise.all([
     Promise.all(
       accounts
         .filter((p) => propCheckbox(p, ACC.active) !== false)
         .map((p) => accountBalanceFromPage(env, p)),
     ).then((values) => values.reduce((total, value) => total + value, 0)),
     sum(boxes, BOX.balance, BOX.active),
-    sum(assets, AST.value, AST.active),
   ]);
 
   const stat = (txs) => {
@@ -4027,8 +4003,7 @@ async function showOverview(env, msg) {
     "",
     `💳 موجودی حساب‌ها: <b>${fmt(cash)} تومان</b>`,
     `📦 موجودی باکس‌ها: <b>${fmt(boxTotal)} تومان</b>`,
-    `💎 ارزش دارایی‌ها: <b>${fmt(assetValue)} تومان</b>`,
-    `🧮 مجموع حساب‌ها و دارایی‌ها: <b>${fmt(cash + assetValue)} تومان</b>`,
+    `💎 دارایی‌های فعال: <b>${fa(assets.filter((p) => propCheckbox(p, AST.active) !== false).length)}</b> مورد`,
     "",
     "━━━━━━━━━━━━━━",
     `📅 <b>عملکرد ${MONTHS[cm.m - 1]} ${fa(cm.y)}</b>`,
@@ -4385,14 +4360,21 @@ async function fetchRows(env, e, range) {
   const ent = ENT[e];
   const filter =
     range && ent.date
-      ? {
+      ? e === "l"
+        ? {
+          and: [
+            { timestamp: "created_time", created_time: { on_or_after: range.start } },
+            { timestamp: "created_time", created_time: { on_or_before: range.end } },
+          ],
+        }
+        : {
           and: [
             { property: ent.date, date: { on_or_after: range.start } },
             { property: ent.date, date: { on_or_before: range.end } },
           ],
         }
       : undefined;
-  const sorts = ent.date
+  const sorts = ent.date && e !== "l"
     ? [
         { property: ent.date, direction: "ascending" },
         { timestamp: "created_time", direction: "ascending" },
@@ -4464,7 +4446,6 @@ async function buildDetail(env, e, range) {
   const schema = await getSchema(env, ent.key);
   const pages = await fetchRows(env, e, range);
   const rel = await relationMap(env, schema, pages);
-  const purchaseByAsset = e === "s" ? await assetPurchaseMap(env, pages) : null;
 
   let cols = [
     ...schema.props.filter((p) => p.type === "title"),
@@ -4472,12 +4453,6 @@ async function buildDetail(env, e, range) {
       (p) => p.type !== "title" && p.type !== "files" && !isHiddenField(e, p),
     ),
   ];
-  if (e === "s")
-    cols = cols.filter((p) => p.name !== AST.symbol && p.name !== AST.value);
-  const assetCategoryColumn =
-    e === "s" ? cols.find((p) => p.name === AST.category) : null;
-  if (assetCategoryColumn)
-    cols = cols.filter((p) => p.name !== AST.category);
 
   // برای جدول‌های کوچک، مقدارهای دقیق rollup/formula پولی را جدا می‌گیریم
   const exact = new Map();
@@ -4487,14 +4462,6 @@ async function buildDetail(env, e, range) {
         isMoneyField(e, p.name) &&
         (p.type === "rollup" || p.type === "formula"),
     );
-    if (e === "s") {
-      const marketValue = schema.props.find((p) => p.name === AST.value);
-      if (
-        marketValue &&
-        ["rollup", "formula"].includes(marketValue.type) &&
-        !need.some((p) => p.name === marketValue.name)
-      ) need.push(marketValue);
-    }
     const jobs = [];
     for (const pg of pages)
       for (const p of need) {
@@ -4522,13 +4489,7 @@ async function buildDetail(env, e, range) {
   const header = cols.map((p) =>
     isMoneyField(e, p.name) ? p.name + " (تومان)" : p.name,
   );
-  if (e === "s") {
-    header.push(...ASSET_PURCHASE_REPORT_COLUMNS.map((column) => column.name));
-    if (assetCategoryColumn) header.push(assetCategoryColumn.name);
-    header.push("مجموع ارزش همه دارایی‌ها (تومان)");
-  }
   const lines = [csvLine(header)];
-  let assetTotal = 0;
   for (const pg of pages) {
     const cells = cols.map((p) => {
       const money = isMoneyField(e, p.name);
@@ -4536,37 +4497,8 @@ async function buildDetail(env, e, range) {
       if (money && exact.has(key)) return tomanPlain(exact.get(key));
       return cellText(pg, p, { money, rel, csv: true });
     });
-    if (e === "s") {
-      const purchases = purchaseByAsset.get(compactId(pg.id)) || [];
-      cells.push(
-        ...ASSET_PURCHASE_REPORT_COLUMNS.map((column) =>
-          purchases
-            .map((purchase) => {
-              if (column.name === "تاریخ خرید") {
-                const date = propDate(purchase, TX.date);
-                return date ? jalaliStr(date, true) : "";
-              }
-              const value = numberFromItem(purchase.properties?.[column.field]);
-              return value == null ? "" : tomanPlain(value);
-            })
-            .join("؛ "),
-        ),
-      );
-      if (assetCategoryColumn)
-        cells.push(cellText(pg, assetCategoryColumn, { rel, csv: true }));
-      assetTotal += exact.get(`${pg.id}|${AST.value}`) ?? propNumber(pg, AST.value);
-      cells.push("");
-    }
     lines.push(csvLine(cells));
   }
-  if (e === "s")
-    lines.push(
-      csvLine([
-        "جمع کل دارایی‌ها",
-        ...Array(header.length - 2).fill(""),
-        tomanPlain(assetTotal),
-      ]),
-    );
   return {
     filename: ent.key + "_detail_" + rangeTag(ent.date ? range : null) + ".csv",
     csv: "\uFEFF" + lines.join("\r\n"),
@@ -4797,10 +4729,8 @@ const PDF_DETAIL_COLUMNS = {
     TX.fromAccount,
     TX.toAccount,
     TX.category,
-    TX.box,
-    TX.asset,
-    TX.assetQty,
-    TX.unitPrice,
+    TX.fromBox,
+    TX.toBox,
     TX.desc,
   ],
   allocations: [
@@ -4811,23 +4741,18 @@ const PDF_DETAIL_COLUMNS = {
     ALC.toAccount,
     ALC.fromBox,
     ALC.toBox,
-    ALC.desc,
   ],
-  accounts: [ACC.title, ACC.balance, ACC.type],
+  accounts: [ACC.title, ACC.balance],
   boxes: [BOX.title, BOX.balance],
   categories: [CAT.title, CAT.level, CAT.parent],
   assets: [
     AST.title,
-    AST.type,
     AST.unit,
-    AST.qty,
-    AST.price,
+    "مقدار",
+    "قیمت زمان خرید",
     "تاریخ خرید",
-    "ارزش دارایی هنگام خرید",
-    "مبلغ خرید",
-    "قیمت تمام‌شده هر واحد",
     AST.category,
-    "مجموع ارزش همه دارایی‌ها",
+    "توضیحات",
   ],
 };
 
@@ -5126,7 +5051,8 @@ const propChoice = (page, name) => {
   );
 };
 const propDate = (page, name) =>
-  page.properties?.[name]?.date?.start?.slice(0, 10) || null;
+  page.properties?.[name]?.date?.start?.slice(0, 10) ||
+  page.properties?.[name]?.created_time?.slice(0, 10) || null;
 const propCheckbox = (page, name) => {
   const p = page.properties?.[name];
   return p?.type === "checkbox" ? p.checkbox : null;
