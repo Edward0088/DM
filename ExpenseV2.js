@@ -126,7 +126,6 @@ const TYPE_META = {
     chart: null,
     accountMode: "to",
     needsBox: false,
-    optionalBox: true,
     optionalCategory: true,
   },
   انتقال: {
@@ -713,7 +712,7 @@ async function handleMenu(env, msg, action) {
     return editPanel(
       env,
       msg,
-      "➕ <b>ثبت تراکنش جدید</b>\nنوع را انتخاب کن: درآمد به حساب یا باکس اضافه می‌شود، هزینه از مبدأ پرداخت کم می‌شود و انتقال، پول را از یک حساب به حساب دیگر جابه‌جا می‌کند.",
+      "➕ <b>ثبت تراکنش جدید</b>\nنوع را انتخاب کن: درآمد به حساب اصلی اضافه می‌شود، هزینه از مبدأ پرداخت کم می‌شود و انتقال، پول را از یک حساب به حساب دیگر جابه‌جا می‌کند.",
       txTypeKeyboard(),
     );
   }
@@ -1119,14 +1118,13 @@ async function handleTxCallback(env, msg, action, args) {
   }
 
   if (action === "date") {
-    state.draft.date = addDays(state.draft.date, Number(args[0]));
-    await setState(env, chatId, state);
     return sendTxConfirm(env, chatId, state, msg);
   }
 
   if (action === "save") {
     const d = state.draft;
     if (!(await ensureTransactionFunds(env, chatId, state, msg))) return;
+    d.date = todayTehran();
     await saveTransaction(env, d);
     await clearState(env, chatId);
     const boxReplacesAccount = Boolean(d.box && TYPE_META[d.type].optionalBox);
@@ -1174,9 +1172,10 @@ async function continueTxFlow(env, chatId, state, msg = null) {
   const d = state.draft;
   const meta = TYPE_META[d.type];
 
-  if (d.type === "درآمد" && !d.box && !d.skipBox) {
-    const unallocated = await getUnallocatedBox(env);
-    if (unallocated) d.box = unallocated;
+  if (d.type === "درآمد" && !d.toAccount) {
+    d.toAccount = await findMainAccount(env);
+    if (!d.toAccount)
+      return panel(env, chatId, msg, "حساب اصلی پیدا نشد. ابتدا حسابی با نام «حساب اصلی» بساز.", backHome());
   }
 
   if (meta.optionalBox && !d.box && !d.skipBox)
@@ -1288,7 +1287,7 @@ async function choose(
     box: {
       list: async () => await listBoxes(env),
       icon: "📦",
-      text: "📦 اگر مبلغ این تراکنش از یک باکس پرداخت می‌شود یا باید به باکسی اضافه شود، آن باکس را انتخاب کن. در غیر این صورت «رد کردن این مرحله» را بزن تا از حساب استفاده شود.",
+      text: "📦 اگر هزینه از باکس پرداخت می‌شود، آن را انتخاب کن. در غیر این صورت «رد کردن این مرحله» را بزن تا از حساب استفاده شود.",
       cb: (id) => `tx:box:${id}`,
     },
     ast: {
@@ -1469,7 +1468,7 @@ async function sendTxConfirm(env, chatId, state, msg = null) {
   const lines = [
     `${TYPE_META[d.type].icon} <b>مرور و ثبت تراکنش</b>`,
     "",
-    "عنوان، مبلغ، مبدأ یا مقصد و دسته‌بندی را بررسی کن. با زدن «ثبت»، تراکنش در سوابق مالی ذخیره می‌شود؛ دکمه‌های تاریخ هم روز ثبت را تغییر می‌دهند.",
+    "عنوان، مبلغ، مبدأ یا مقصد و دسته‌بندی را بررسی کن. تاریخ ثبت به‌صورت خودکار تعیین می‌شود.",
     "",
     `نوع: ${esc(d.type)}`,
     `عنوان: ${esc(d.title)}`,
@@ -1493,7 +1492,6 @@ async function sendTxConfirm(env, chatId, state, msg = null) {
   const kb = {
     inline_keyboard: [
       [btn("✅ ثبت", "tx:save")],
-      [btn("📅 روز قبل", "tx:date:-1"), btn("📅 روز بعد", "tx:date:1")],
       [btn("❌ لغو", "tx:cancel")],
     ],
   };
@@ -1501,6 +1499,11 @@ async function sendTxConfirm(env, chatId, state, msg = null) {
 }
 
 async function saveTransaction(env, d) {
+  if (d.type === "درآمد") {
+    const mainAccount = await findMainAccount(env);
+    if (d.box || !mainAccount || !d.toAccount || !idEq(d.toAccount.id, mainAccount.id))
+      throw new Error("درآمد فقط به حساب اصلی واریز می‌شود؛ برای باکس از تخصیص استفاده کن.");
+  }
   const boxReplacesAccount = Boolean(d.box && TYPE_META[d.type].optionalBox);
   const props = {
     [TX.title]: titleProp(d.title),
@@ -1770,6 +1773,7 @@ async function handleAllocationCallback(env, msg, action, args) {
         `موجودی مبدأ کافی نیست. موجودی فعلی: <b>${fmt(available)} تومان</b>`,
         backHome(),
       );
+    d.date = todayTehran();
     await saveAllocation(env, state.draft);
     await clearState(env, chatId);
     return editPanel(env, msg, "✅ انتقال بین حساب و باکس ثبت شد.", {
@@ -1916,10 +1920,8 @@ async function saveAllocation(env, d) {
     };
     if (d.operation === "assign") {
       txProps[TX.fromAccount] = relationProp(d.fromAccount.id);
-      txProps[TX.toBox] = relationProp(d.toBox.id);
     } else {
       txProps[TX.toAccount] = relationProp(d.toAccount.id);
-      txProps[TX.fromBox] = relationProp(d.fromBox.id);
     }
     await notion(env, "POST", "/pages", {
       parent: { database_id: dbId(env, "transactions") },
@@ -1997,11 +1999,9 @@ async function handleCrud(env, msg, action, args) {
   if (action === "charge") {
     const entity = args.length > 1 ? args[0] : "a";
     const id = args.length > 1 ? args[1] : args[0];
-    const target = entity === "b"
-      ? (await listBoxes(env)).find((x) => idEq(x.id, id))
-      : (await listAccounts(env)).find((x) => idEq(x.id, id));
-    if (!target) return listEntity(env, chatId, msg, entity === "b" ? "b" : "a", 0);
-    const targetName = entity === "b" ? "باکس" : "حساب";
+    const target = await findMainAccount(env);
+    if (entity !== "a" || !target || !idEq(target.id, id))
+      return editPanel(env, msg, "فقط حساب اصلی شارژ می‌شود. برای افزایش موجودی باکس، تخصیص از حساب اصلی ثبت کن.", backHome());
     await setState(env, chatId, {
       flow: "tx",
       step: "title",
@@ -2009,15 +2009,15 @@ async function handleCrud(env, msg, action, args) {
         type: "درآمد",
         status: "ثبت‌شده",
         currency: DEFAULT_CURRENCY,
-        ...(entity === "b" ? { box: target } : { toAccount: target }),
+        toAccount: target,
         skipBox: true,
         accountCharge: true,
       },
     });
-    await editPanel(env, msg, `💰 شارژ ${targetName} «${esc(target.name)}»`, {
+    await editPanel(env, msg, `💰 شارژ حساب «${esc(target.name)}»`, {
       inline_keyboard: [[btn("❌ لغو", "tx:cancel")]],
     });
-    return send(env, chatId, `📝 عنوان این درآمد را وارد کن؛ این تراکنش مستقیماً به ${targetName} «${esc(target.name)}» اضافه می‌شود و عنوانش در سوابق آن دیده خواهد شد.\nمثلاً: <code>واریز به ${targetName}</code>`, {
+    return send(env, chatId, `📝 عنوان این درآمد را وارد کن؛ این تراکنش مستقیماً به حساب «${esc(target.name)}» اضافه می‌شود و عنوانش در سوابق آن دیده خواهد شد.\nمثلاً: <code>واریز به حساب</code>`, {
       reply_markup: { force_reply: true, input_field_placeholder: "مثلاً واریز حقوق" },
     });
   }
@@ -2028,7 +2028,7 @@ async function handleCrud(env, msg, action, args) {
       return editPanel(
         env,
         msg,
-        "➕ <b>ثبت تراکنش جدید</b>\nنوع را انتخاب کن: درآمد به حساب یا باکس اضافه می‌شود، هزینه از مبدأ پرداخت کم می‌شود و انتقال، پول را از یک حساب به حساب دیگر جابه‌جا می‌کند.",
+        "➕ <b>ثبت تراکنش جدید</b>\nنوع را انتخاب کن: درآمد به حساب اصلی اضافه می‌شود، هزینه از مبدأ پرداخت کم می‌شود و انتقال، پول را از یک حساب به حساب دیگر جابه‌جا می‌کند.",
         txTypeKeyboard(),
       );
     if (e === "l") return startAllocation(env, msg);
@@ -2260,6 +2260,10 @@ async function handleCrud(env, msg, action, args) {
     return setFieldValue(env, chatId, msg, st, emptyPayload(p), "—");
   }
   if (action === "w" && st.flow === "new") {
+    const schema = await getSchema(env, ENT[st.ent].key);
+    for (const p of schema.props) {
+      if (p.type === "date") st.props[p.name] = { date: { start: todayTehran() } };
+    }
     const res = await notion(env, "POST", "/pages", {
       parent: { database_id: dbId(env, ENT[st.ent].key) },
       properties: st.props,
@@ -2575,6 +2579,7 @@ async function showItem(env, chatId, msg, e, id, note = "") {
   }
 
   const cid = compactId(id);
+  const mainAccount = e === "a" ? await findMainAccount(env) : null;
   const categoryParentId =
     e === "c" ? page.properties?.[CAT.parent]?.relation?.[0]?.id : null;
   const backToList =
@@ -2583,9 +2588,10 @@ async function showItem(env, chatId, msg, e, id, note = "") {
       : `x:l:${e}:0`;
   const kb = {
     inline_keyboard: [
-      ...(e === "a" ? [[btn("💰 شارژ حساب", `x:charge:a:${cid}`)]] : []),
+      ...(e === "a" && mainAccount && idEq(id, mainAccount.id)
+        ? [[btn("💰 شارژ حساب", `x:charge:a:${cid}`)]] : []),
       ...(e === "b" ? [
-        [btn("💰 شارژ باکس", `al:start-box:${cid}`)],
+        [btn("🎯 تخصیص به باکس", `al:start-box:${cid}`)],
         [btn("➕ افزودن باکس جدید", "x:n:b")],
       ] : []),
       [btn("✏️ ویرایش", `x:e:${e}:${cid}`), btn("🗑 حذف", `x:d:${e}:${cid}`)],
@@ -3581,19 +3587,18 @@ async function startNew(env, chatId, msg, e) {
       st.labels[p.name] = "✅";
     }
   }
+  // Date properties are filled when the record is created, never requested from the user.
+  for (const p of schema.props) {
+    if (p.type !== "date") continue;
+    const createdOn = todayTehran();
+    st.props[p.name] = { date: { start: createdOn } };
+    st.labels[p.name] = jalaliStr(createdOn);
+  }
   if (e === "b") {
     const systemField = schema.props.find(
       (p) => p.name === BOX.system && p.type === "checkbox",
     );
     if (systemField) st.props[BOX.system] = { checkbox: false };
-  }
-  if (e === "a") {
-    for (const p of schema.props) {
-      if (!isAccountOpeningDateField(p)) continue;
-      const createdOn = todayTehran();
-      st.props[p.name] = { date: { start: createdOn } };
-      st.labels[p.name] = createdOn;
-    }
   }
   return advanceNew(env, chatId, msg, st);
 }
@@ -5241,7 +5246,7 @@ async function getSchema(env, key) {
   if (!e) return schema;
   return {
     ...schema,
-    editable: schema.editable.filter((p) => !isHiddenField(e, p)),
+    editable: schema.editable.filter((p) => p.type !== "date" && !isHiddenField(e, p)),
   };
 }
 
