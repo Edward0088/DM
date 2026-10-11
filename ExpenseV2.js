@@ -5159,7 +5159,6 @@ async function exactNumber(env, page, name) {
   const p = page.properties?.[name];
   const direct = propNumber(page, name);
   if (
-    direct ||
     !p?.id ||
     !["rollup", "formula"].includes(p.type) ||
     env.EXACT_ROLLUPS === "0"
