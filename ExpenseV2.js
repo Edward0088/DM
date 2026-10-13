@@ -70,6 +70,7 @@ const CAT = {
 };
 const BOX = {
   title: "عنوان",
+  desc: "توضیحات باکس",
   code: "کد",
   order: "ترتیب",
   balance: "موجودی",
@@ -4452,6 +4453,14 @@ async function buildDetail(env, e, range) {
       (p) => p.type !== "title" && p.type !== "files" && !isHiddenField(e, p),
     ),
   ];
+  if (e === "b") {
+    const priority = [BOX.title, BOX.balance, BOX.desc];
+    cols.sort((a, b) => {
+      const ai = priority.indexOf(a.name);
+      const bi = priority.indexOf(b.name);
+      return (ai < 0 ? priority.length : ai) - (bi < 0 ? priority.length : bi);
+    });
+  }
 
   // برای جدول‌های کوچک، مقدارهای دقیق rollup/formula پولی را جدا می‌گیریم
   const exact = new Map();
@@ -4742,7 +4751,7 @@ const PDF_DETAIL_COLUMNS = {
     ALC.toBox,
   ],
   accounts: [ACC.title, ACC.balance],
-  boxes: [BOX.title, BOX.balance],
+  boxes: [BOX.title, BOX.balance, BOX.desc],
   categories: [CAT.title, CAT.level, CAT.parent],
   assets: [
     AST.title,
