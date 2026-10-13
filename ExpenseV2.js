@@ -81,7 +81,6 @@ const BOX = {
 };
 const AST = {
   title: "عنوان",
-  type: "نوع دارایی",
   symbol: "نماد",
   unit: "واحد",
   currency: "ارز پایه",
@@ -3000,10 +2999,8 @@ async function startNewAsset(env, chatId, msg) {
   const schema = await getSchema(env, "assets");
   const assetNumberField = (...names) =>
     schema.props.find((p) => names.includes(p.name) && p.type === "number");
-  const typeField = schema.props.find((p) => p.name === AST.type);
   const fields = {
     title: schema.props.find((p) => p.type === "title"),
-    type: typeField,
     qty: assetNumberField("مقدار", AST.qty),
     price: assetNumberField("قیمت زمان خرید", AST.price),
     value: assetNumberField(AST.value),
@@ -3050,7 +3047,6 @@ async function startNewAsset(env, chatId, msg) {
     assetFlow: true,
     assetStep: "title",
     fields,
-    types: typeField?.options || [],
     asset: { date: todayTehran() },
   };
   await setState(env, chatId, state);
@@ -3090,9 +3086,9 @@ async function handleAssetCreateText(env, chatId, state, text) {
   }
   if (state.assetStep === "description") {
     asset.description = text === "-" ? "" : text.slice(0, 2000);
-    state.assetStep = "type";
+    state.assetStep = "category";
     await setState(env, chatId, state);
-    return showAssetTypeChoices(env, chatId, null, state);
+    return showAssetCategoryChoices(env, chatId, null, state);
   }
   if (state.assetStep === "price-input") {
     const price = parseScaledAmount(text, state.moneyUnitFactor);
@@ -3210,25 +3206,6 @@ async function showAssetCategoryChoices(env, chatId, msg, state, page = 0) {
   );
 }
 
-function showAssetTypeChoices(env, chatId, msg, state) {
-  const options = state.types;
-  const rows = chunk(
-    options.map((name, index) => btn(name, "x:assettype:" + index)),
-    2,
-  );
-  rows.push([btn("⏭ رد کردن نوع دارایی", "x:assettypeskip")]);
-  rows.push([btn("❌ لغو", "x:x")]);
-  return panel(
-    env,
-    chatId,
-    msg,
-    options.length
-      ? "نوع دارایی رو انتخاب کن یا ردش کن:"
-      : "نوعی تعریف نشده؛ این مرحله رو رد کن:",
-    { inline_keyboard: rows },
-  );
-}
-
 async function showAssetFundingChoices(env, chatId, msg, state) {
   const boxes = await listBoxes(env);
   const rows = boxes.map((box) => [
@@ -3268,9 +3245,14 @@ async function handleAssetCreateCallback(env, msg, state, action, args) {
   const chatId = msg.chat.id;
   if (action === "assetdescskip" && state.assetStep === "description") {
     state.asset.description = "";
-    state.assetStep = "type";
+    state.assetStep = "category";
     await setState(env, chatId, state);
-    return showAssetTypeChoices(env, chatId, msg, state);
+    return showAssetCategoryChoices(env, chatId, msg, state);
+  }
+  if (state.assetStep === "type" && ["assettype", "assettypeskip"].includes(action)) {
+    state.assetStep = "category";
+    await setState(env, chatId, state);
+    return showAssetCategoryChoices(env, chatId, msg, state);
   }
   if (
     action === "unit" &&
@@ -3305,21 +3287,6 @@ async function handleAssetCreateCallback(env, msg, state, action, args) {
     state.assetStep = "box";
     await setState(env, chatId, state);
     return showAssetFundingChoices(env, chatId, msg, state);
-  }
-  if (
-    ["assettype", "assettypeskip"].includes(action) &&
-    state.assetStep === "type"
-  ) {
-    if (action === "assettype") {
-      const type = state.types[Number(args[0])];
-      if (!type) return;
-      state.asset.type = type;
-    } else {
-      delete state.asset.type;
-    }
-    state.assetStep = "category";
-    await setState(env, chatId, state);
-    return showAssetCategoryChoices(env, chatId, msg, state);
   }
   if (action === "assetcatpage" && state.assetStep === "category")
     return showAssetCategoryChoices(env, chatId, msg, state, Number(args[0]) || 0);
@@ -3375,7 +3342,6 @@ function sendAssetCreateConfirm(env, chatId, msg, state) {
     "",
     `عنوان: ${esc(a.title)}`,
     a.description ? `توضیحات: ${esc(a.description)}` : null,
-    a.type ? `نوع: ${esc(a.type)}` : null,
     a.category
       ? "دسته‌بندی سرمایه‌گذاری: " + esc((a.category.icon ? a.category.icon + " " : "") + a.category.name)
       : null,
@@ -3400,17 +3366,11 @@ async function saveNewAssetAndPurchase(env, chatId, msg, state) {
   const a = state.asset;
   if (!(await ensureAssetPurchaseFunds(env, chatId, msg, state))) return;
   const fields = state.fields;
-  const typeField = fields.type;
   const properties = {
     [fields.title.name]: titleProp(a.title),
   };
   if (fields.qty) properties[fields.qty.name] = { number: a.qty };
   if (fields.price) properties[fields.price.name] = { number: a.currentPrice };
-  if (a.type && typeField)
-    properties[AST.type] =
-      typeField.type === "status"
-        ? { status: { name: a.type } }
-        : selectProp(a.type);
   if (fields.description && a.description)
     properties[fields.description.name] = richTextProp(a.description);
   if (fields.value?.type === "number")
