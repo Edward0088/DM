@@ -3067,7 +3067,7 @@ async function handleAssetCreateText(env, chatId, state, text) {
     return send(
       env,
       chatId,
-      `قیمت هر واحد ثبت شد: <b>${fmt(price)} تومان</b>.\nمقدار دارایی را وارد کن:`,
+      `قیمت هر واحد در زمان خرید ثبت شد: <b>${fmt(price)} تومان</b>.\nمقدار دارایی را وارد کن:`,
       {
         reply_markup: { force_reply: true, input_field_placeholder: "مثلاً ۷" },
       },
@@ -3299,7 +3299,7 @@ async function handleAssetCreateCallback(env, msg, state, action, args) {
       msg,
       "x",
       "x:x",
-      "واحد قیمت فعلی هر واحد دارایی را انتخاب کن:",
+      "واحد قیمت هر واحد دارایی در زمان خرید را انتخاب کن. این قیمت به‌عنوان قیمت اولیه دارایی هم ثبت می‌شود:",
     );
   }
   if (action === "assetbox" && state.assetStep === "box") {
@@ -3341,10 +3341,10 @@ function sendAssetCreateConfirm(env, chatId, msg, state) {
     a.category
       ? "دسته‌بندی سرمایه‌گذاری: " + esc((a.category.icon ? a.category.icon + " " : "") + a.category.name)
       : null,
-    `قیمت فعلی هر واحد: <b>${fmt(a.currentPrice)} تومان</b>`,
+    `قیمت هر واحد در زمان خرید: <b>${fmt(a.currentPrice)} تومان</b>`,
     `مقدار: <b>${fa(a.qty)}</b>`,
     `ارزش روز دارایی: <b>${fmt(value)} تومان</b>`,
-    `هزینه‌ی نهایی خرید: <b>${fmt(a.cost)} تومان</b>`,
+    `مبلغ نهایی خرید و تراکنش خودکار: <b>${fmt(a.cost)} تومان</b>`,
     a.box
       ? `پرداخت از باکس: ${esc(a.box.name)}`
       : `پرداخت از حساب: ${esc(a.account?.name || "")}`,
@@ -3428,6 +3428,7 @@ async function saveNewAssetAndPurchase(env, chatId, msg, state) {
       amount: a.cost,
       date: a.date,
       asset: { id: assetPage.id, name: a.title },
+      category: a.category,
       assetQty: a.qty,
       unitPrice: Math.round(a.cost / a.qty),
       assetValueAtPurchase: Math.round(a.currentPrice * a.qty),
