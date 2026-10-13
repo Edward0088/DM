@@ -850,8 +850,8 @@ async function showMoneyUnitChoice(
   });
 }
 
-function sendScaledAmountPrompt(env, chatId, factor) {
-  return send(env, chatId, scaledAmountPrompt(factor), {
+function sendScaledAmountPrompt(env, chatId, factor, context = "") {
+  return send(env, chatId, `${scaledAmountPrompt(factor)}${context}`, {
     reply_markup: {
       force_reply: true,
       input_field_placeholder:
@@ -1600,12 +1600,23 @@ async function handleAllocationCallback(env, msg, action, args) {
   if (action === "unit" && state.step === "amount-unit") {
     state.moneyUnitFactor = amountUnitFactor(args[0]);
     if (!state.moneyUnitFactor) return;
+    let balanceContext = "";
+    if (state.draft.operation === "assign" && state.draft.fromAccount) {
+      balanceContext =
+        `\n\n🏦 موجودی «${esc(state.draft.fromAccount.name)}»: <b>${fmt(state.maxAmount)} تومان</b>` +
+        `\nحداکثر مبلغ قابل تخصیص: <b>${fmt(state.maxAmount)} تومان</b>`;
+    }
     state.step = "amount-input";
     await setState(env, chatId, state);
     await editPanel(env, msg, amountReplyNotice(), {
       inline_keyboard: [[btn("❌ لغو", "al:cancel")]],
     });
-    return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
+    return sendScaledAmountPrompt(
+      env,
+      chatId,
+      state.moneyUnitFactor,
+      balanceContext,
+    );
   }
 
   if (action === "amount-edit" && state.step === "amount-review") {
