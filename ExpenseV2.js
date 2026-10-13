@@ -5102,10 +5102,6 @@ async function exactNumber(env, page, name) {
     if (direct !== null) return direct;
     throw new Error(`شناسه‌ی فیلد «${name}» از Notion دریافت نشد`);
   }
-  if (env.EXACT_ROLLUPS === "0") {
-    if (direct !== null) return direct;
-    throw new Error(`مقدار عددی فیلد «${name}» از Notion دریافت نشد`);
-  }
   try {
     const r = await notion(
       env,
