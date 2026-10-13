@@ -2299,12 +2299,11 @@ async function listEntity(env, chatId, msg, e, page = 0) {
         ? rawName.replace(/→/g, "\u200E←\u200E")
         : rawName;
       const brief = await briefOf(env, e, p);
-      const description = e === "b" ? boxDescriptionFromPage(p) : "";
       return [
         btn(
           trunc(
-            `${brief.icon} ${name}${brief.text ? " · " + brief.text : ""}${description ? " · " + description : ""}`,
-            e === "b" ? 100 : 58,
+            `${brief.icon} ${name}${brief.text ? " · " + brief.text : ""}`,
+            58,
           ),
           `x:v:${e}:${compactId(p.id)}`,
         ),
@@ -5054,14 +5053,6 @@ const propText = (page, name) =>
     .map((x) => x.plain_text)
     .join("")
     .trim();
-function boxDescriptionFromPage(page) {
-  for (const [name, property] of Object.entries(page.properties || {})) {
-    if (!/توضیح/.test(name) || property.type !== "rich_text") continue;
-    const text = propText(page, name);
-    if (text) return text;
-  }
-  return "";
-}
 const propChoice = (page, name) => {
   const p = page.properties?.[name];
   return (
