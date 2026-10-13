@@ -115,6 +115,8 @@ const ALC = {
 };
 
 const TX_TYPES = ["هزینه", "درآمد", "انتقال", "خرید دارایی", "فروش دارایی"];
+const transactionTypeFromCode = (code) => TX_TYPES[Number(code) - 1] || null;
+const transactionTypeCode = (type) => TX_TYPES.indexOf(type) + 1;
 const TYPE_META = {
   هزینه: {
     icon: "💸",
@@ -1501,6 +1503,23 @@ async function saveTransaction(env, d) {
   if (d.category) props[TX.category] = relationProp(d.category.id);
   if (d.box) props[d.type === "درآمد" || d.type === "فروش دارایی" ? TX.toBox : TX.fromBox] = relationProp(d.box.id);
   if (d.desc) props[TX.desc] = richTextProp(d.desc);
+  if (d.asset) {
+    const schema = await getSchema(env, "transactions");
+    const assetRelation = schema.props.find((p) =>
+      p.name === TX.asset && p.type === "relation" &&
+      p.relDb && idEq(p.relDb, dbId(env, "assets")),
+    );
+    const assetQty = schema.props.find((p) => p.name === TX.assetQty && p.type === "number");
+    const unitPrice = schema.props.find((p) => p.name === TX.unitPrice && p.type === "number");
+    const purchaseValue = schema.props.find((p) =>
+      p.name === TX.assetValueAtPurchase && p.type === "number",
+    );
+    if (assetRelation) props[TX.asset] = relationProp(d.asset.id);
+    if (assetQty && d.assetQty) props[TX.assetQty] = { number: d.assetQty };
+    if (unitPrice && d.unitPrice) props[TX.unitPrice] = { number: d.unitPrice };
+    if (purchaseValue && d.assetValueAtPurchase)
+      props[TX.assetValueAtPurchase] = { number: d.assetValueAtPurchase };
+  }
 
   const res = await notion(env, "POST", "/pages", {
     parent: { database_id: dbId(env, "transactions") },
@@ -1973,7 +1992,7 @@ async function handleCrud(env, msg, action, args) {
       : listCategoryRoots(env, chatId, msg, page, group);
   }
 
-  if (["l", "v", "e", "d", "D", "n", "x", "charge"].includes(action))
+  if (["l", "v", "e", "d", "D", "n", "x", "charge", "tg"].includes(action))
     await clearState(env, chatId);
 
   if (action === "x") {
@@ -1985,9 +2004,18 @@ async function handleCrud(env, msg, action, args) {
       mainMenuKeyboard(),
     );
   }
+  if (action === "tg")
+    return listEntity(env, chatId, msg, "t", 0, transactionTypeFromCode(args[0]));
   if (action === "l")
-    return listEntity(env, chatId, msg, args[0], Number(args[1]) || 0);
-  if (action === "v") return showItem(env, chatId, msg, args[0], args[1]);
+    return listEntity(
+      env, chatId, msg, args[0], Number(args[1]) || 0,
+      args[0] === "t" ? transactionTypeFromCode(args[2]) : null,
+    );
+  if (action === "v")
+    return showItem(
+      env, chatId, msg, args[0], args[1], "",
+      args[0] === "t" ? transactionTypeFromCode(args[2]) : null,
+    );
 
   if (action === "charge") {
     const entity = args.length > 1 ? args[0] : "a";
@@ -2272,11 +2300,14 @@ async function handleCrud(env, msg, action, args) {
   }
 }
 
-async function listEntity(env, chatId, msg, e, page = 0) {
+async function listEntity(env, chatId, msg, e, page = 0, txType = null) {
   if (e === "c") return listCategoryRoots(env, chatId, msg, page);
   const ent = ENT[e];
   const rows = ent.date
     ? await queryDb(env, ent.key, {
+        filter: e === "t" && txType
+          ? { property: TX.type, select: { equals: txType } }
+          : undefined,
         sorts: e === "l"
           ? [{ timestamp: "created_time", direction: "descending" }]
           : [
@@ -2305,17 +2336,27 @@ async function listEntity(env, chatId, msg, e, page = 0) {
             `${brief.icon} ${name}${brief.text ? " · " + brief.text : ""}`,
             58,
           ),
-          `x:v:${e}:${compactId(p.id)}`,
+          `x:v:${e}:${compactId(p.id)}${e === "t" ? ":" + transactionTypeCode(txType) : ""}`,
         ),
       ];
     }),
   );
 
   const nav = [];
-  if (page > 0) nav.push(btn("◀️ قبلی", `x:l:${e}:${page - 1}`));
-  if (hasNext) nav.push(btn("بعدی ▶️", `x:l:${e}:${page + 1}`));
+  const listCallback = (targetPage) =>
+    `x:l:${e}:${targetPage}${e === "t" ? ":" + transactionTypeCode(txType) : ""}`;
+  if (page > 0) nav.push(btn("◀️ قبلی", listCallback(page - 1)));
+  if (hasNext) nav.push(btn("بعدی ▶️", listCallback(page + 1)));
 
-  const kb = [...buttons];
+  const kb = e === "t"
+    ? [
+        [btn(`${txType ? "" : "✅ "}همه`, "x:tg:0")],
+        ...chunk(TX_TYPES.map((type, index) =>
+          btn(`${txType === type ? "✅ " : ""}${TYPE_META[type].icon} ${type}`, `x:tg:${index + 1}`),
+        ), 2),
+        ...buttons,
+      ]
+    : [...buttons];
   if (nav.length) kb.push(nav);
   const addLabel = e === "s" ? "➕ افزودن دارایی" : `➕ ${ent.one} جدید`;
   kb.push([btn(addLabel, `x:n:${e}`), btn("📤 CSV", `r:t:${e}`)]);
@@ -2323,6 +2364,7 @@ async function listEntity(env, chatId, msg, e, page = 0) {
 
   const text =
     `${ent.icon} <b>${esc(ent.fa)}</b> — صفحه ${fa(page + 1)}\n` +
+    (e === "t" ? `نوع: <b>${esc(txType || "همه")}</b>\n` : "") +
     (slice.length
       ? "برای مشاهده، ویرایش یا حذف روی یک مورد بزن 👇"
       : "موردی ثبت نشده.");
@@ -2499,7 +2541,7 @@ async function briefOf(env, e, p) {
   return { icon: "🏷", text: "" };
 }
 
-async function showItem(env, chatId, msg, e, id, note = "") {
+async function showItem(env, chatId, msg, e, id, note = "", txType = null) {
   const ent = ENT[e];
   const [schema, page] = await Promise.all([
     getSchema(env, ent.key),
@@ -2578,7 +2620,7 @@ async function showItem(env, chatId, msg, e, id, note = "") {
   const backToList =
     e === "c" && categoryParentId
       ? `x:cs:${compactId(categoryParentId)}:0`
-      : `x:l:${e}:0`;
+      : `x:l:${e}:0${e === "t" ? ":" + transactionTypeCode(txType) : ""}`;
   const kb = {
     inline_keyboard: [
       ...(e === "a" ? [[btn("💰 شارژ حساب", `x:charge:a:${cid}`)]] : []),
@@ -2955,13 +2997,15 @@ async function startNewAsset(env, chatId, msg) {
     );
   }
   const schema = await getSchema(env, "assets");
+  const assetNumberField = (...names) =>
+    schema.props.find((p) => names.includes(p.name) && p.type === "number");
   const typeField = schema.props.find((p) => p.name === AST.type);
   const fields = {
-    title: schema.props.find((p) => p.name === AST.title),
+    title: schema.props.find((p) => p.type === "title"),
     type: typeField,
-    qty: schema.props.find((p) => p.name === AST.qty),
-    price: schema.props.find((p) => p.name === AST.price),
-    value: schema.props.find((p) => p.name === AST.value),
+    qty: assetNumberField("مقدار", AST.qty),
+    price: assetNumberField("قیمت زمان خرید", AST.price),
+    value: assetNumberField(AST.value),
     category: schema.props.find((p) => p.name === AST.category),
     description: schema.props.find(
       (p) => p.type === "rich_text" && /توضیح/.test(p.name),
@@ -2970,17 +3014,17 @@ async function startNewAsset(env, chatId, msg) {
     symbol: schema.props.find((p) => p.name === AST.symbol),
     currency: schema.props.find((p) => p.name === AST.currency),
     updatedAt: schema.props.find(
-      (p) => p.type === "date" && /بروزرسانی|به‌روزرسانی/.test(p.name),
+      (p) => p.type === "date" && /تاریخ خرید|بروزرسانی|به‌روزرسانی/.test(p.name),
     ),
     active: schema.props.find(
       (p) => p.name === AST.active && p.type === "checkbox",
     ),
   };
-  if (!fields.title || !fields.qty || !fields.price || !fields.value)
+  if (!fields.title || !fields.qty || !fields.price)
     return editPanel(
       env,
       msg,
-      "❌ فیلدهای عنوان، مقدار، قیمت فعلی و ارزش بازار در پایگاه‌داده دارایی‌ها کامل نیستند.",
+      "❌ برای ثبت دارایی، ستون‌های عنوان، مقدار و قیمت زمان خرید باید در پایگاه‌داده دارایی‌ها وجود داشته باشند.",
       backHome(),
     );
 
@@ -3321,7 +3365,7 @@ function sendAssetCreateConfirm(env, chatId, msg, state) {
       : null,
     `قیمت خرید هر واحد: <b>${fmt(a.currentPrice)} تومان</b>`,
     `مقدار: <b>${fa(a.qty)}</b>`,
-    `ارزش روز دارایی: <b>${fmt(value)} تومان</b>`,
+    `ارزش خرید دارایی: <b>${fmt(value)} تومان</b>`,
     `مبلغ نهایی خرید: <b>${fmt(a.cost)} تومان</b> · تراکنش خرید خودکار ثبت می‌شه`,
     a.box
       ? `پرداخت از باکس: ${esc(a.box.name)}`
@@ -4141,10 +4185,22 @@ async function handleReportCallback(env, msg, action, args) {
     return afterRange(env, chatId, msg, st);
   }
 
+  if (action === "tt" && st.ent === "t" && !st.expenseCategory) {
+    st.txType = transactionTypeFromCode(args[0]);
+    await setState(env, chatId, st);
+    return reportFormatMenu(env, chatId, msg, st);
+  }
+  if (action === "types" && st.ent === "t" && !st.expenseCategory)
+    return transactionReportTypeMenu(env, chatId, msg, st);
+  if (action === "tm" && st.ent === "t" && !st.expenseCategory)
+    return reportModeMenu(env, chatId, msg, st);
+
   if (action === "o") {
     st.mode = args[0];
     await setState(env, chatId, st);
-    return reportFormatMenu(env, chatId, msg, st);
+    return st.ent === "t" && !st.expenseCategory
+      ? transactionReportTypeMenu(env, chatId, msg, st)
+      : reportFormatMenu(env, chatId, msg, st);
   }
   if (action === "f")
     return runReport(
@@ -4223,6 +4279,26 @@ async function afterRange(env, chatId, msg, st) {
     await setState(env, chatId, st);
     return reportFormatMenu(env, chatId, msg, st);
   }
+  return reportModeMenu(env, chatId, msg, st);
+}
+
+function transactionReportTypeMenu(env, chatId, msg, st) {
+  const reportName = st.mode === "detail"
+    ? "ریز کامل"
+    : ENT.t.groups[st.mode]?.label || "گزارش";
+  const rows = [
+    [btn("📋 همه‌ی نوع‌ها", "r:tt:0")],
+    ...chunk(TX_TYPES.map((type, index) =>
+      btn(`${TYPE_META[type].icon} ${type}`, `r:tt:${index + 1}`),
+    ), 2),
+    [btn("🔙 انتخاب گزارش", "r:tm"), btn("🏠 منو", "m:home")],
+  ];
+  return panel(env, chatId, msg,
+    `💳 <b>نوع تراکنش گزارش ${esc(reportName)}</b> · ${rangeLabel(st.range)}\nکدوم تراکنش‌ها رو می‌خوای ببینی؟`,
+    { inline_keyboard: rows });
+}
+
+function reportModeMenu(env, chatId, msg, st) {
   const groups = ENT[st.ent].groups || {};
   const rows = [[btn("📄 ریز کامل (همه‌ی ستون‌ها)", "r:o:detail")]];
   const gb = Object.entries(groups).map(([k, g]) =>
@@ -4232,12 +4308,13 @@ async function afterRange(env, chatId, msg, st) {
     rows.push([btn("— خلاصه به تفکیک —", "m:noop")]);
     rows.push(...chunk(gb, 2));
   }
+  if (st.ent === "t") rows.push([btn("🔙 انتخاب بازه", "r:t:t")]);
   rows.push([btn("🏠 منو", "m:home")]);
   return panel(
     env,
     chatId,
     msg,
-    `📤 <b>${esc(ENT[st.ent].fa)}</b> · ${rangeLabel(st.range)}\nنوع گزارش رو انتخاب کن:`,
+    `📤 <b>${esc(ENT[st.ent].fa)}</b> · ${rangeLabel(st.range)}${st.ent === "t" ? "\nنوع تراکنش: " + esc(st.txType || "همه") : ""}\nنوع گزارش رو انتخاب کن:`,
     { inline_keyboard: rows },
   );
 }
@@ -4261,11 +4338,11 @@ function reportFormatMenu(env, chatId, msg, st) {
     env,
     chatId,
     msg,
-    `📎 <b>قالب فایل</b>\n${esc(title)} · ${rangeLabel(st.range)}\nکدوم فایل رو می‌خوای؟`,
+    `📎 <b>قالب فایل</b>\n${esc(title)} · ${rangeLabel(st.range)}${st.ent === "t" ? "\nنوع تراکنش: " + esc(st.txType || "همه") : ""}\nکدوم فایل رو می‌خوای؟`,
     {
       inline_keyboard: [
         [btn("📊 فایل CSV", "r:f:csv"), btn("📄 فایل PDF", "r:f:pdf")],
-        [btn("🔙 انتخاب گزارش", "m:csv"), btn("🏠 منو", "m:home")],
+        [btn("🔙 انتخاب نوع", st.ent === "t" ? "r:types" : "m:csv"), btn("🏠 منو", "m:home")],
       ],
     },
   );
@@ -4283,8 +4360,8 @@ async function runReport(env, chatId, msg, st, mode, format = "csv") {
         mode === "expensecat"
           ? await buildExpenseCategoryReport(env, st.range)
           : mode === "detail"
-          ? await buildDetail(env, e, st.range)
-          : await buildSummary(env, e, st.range, mode);
+          ? await buildDetail(env, e, st.range, e === "t" ? st.txType : null)
+          : await buildSummary(env, e, st.range, mode, e === "t" ? st.txType : null);
       if (!r.count) continue;
       const label = ENT[e].date ? rangeLabel(st.range) : "همه";
       if (format === "pdf") {
@@ -4304,7 +4381,7 @@ async function runReport(env, chatId, msg, st, mode, format = "csv") {
           chatId,
           r.filename,
           r.csv,
-          `${ENT[e].icon} ${ENT[e].fa} — ${label} — ${r.count} ردیف`,
+          r.title || `${ENT[e].icon} ${ENT[e].fa} — ${label} — ${r.count} ردیف`,
           "text/csv",
         );
       }
@@ -4356,24 +4433,25 @@ async function runReport(env, chatId, msg, st, mode, format = "csv") {
   });
 }
 
-async function fetchRows(env, e, range) {
+async function fetchRows(env, e, range, txType = null) {
   const ent = ENT[e];
-  const filter =
-    range && ent.date
-      ? e === "l"
-        ? {
-          and: [
-            { timestamp: "created_time", created_time: { on_or_after: range.start } },
-            { timestamp: "created_time", created_time: { on_or_before: range.end } },
-          ],
-        }
-        : {
-          and: [
-            { property: ent.date, date: { on_or_after: range.start } },
-            { property: ent.date, date: { on_or_before: range.end } },
-          ],
-        }
-      : undefined;
+  const filters = [];
+  if (range && ent.date) {
+    if (e === "l") {
+      filters.push(
+        { timestamp: "created_time", created_time: { on_or_after: range.start } },
+        { timestamp: "created_time", created_time: { on_or_before: range.end } },
+      );
+    } else {
+      filters.push(
+        { property: ent.date, date: { on_or_after: range.start } },
+        { property: ent.date, date: { on_or_before: range.end } },
+      );
+    }
+  }
+  if (e === "t" && txType)
+    filters.push({ property: TX.type, select: { equals: txType } });
+  const filter = filters.length > 1 ? { and: filters } : filters[0];
   const sorts = ent.date && e !== "l"
     ? [
         { property: ent.date, direction: "ascending" },
@@ -4441,10 +4519,10 @@ const ASSET_PURCHASE_REPORT_COLUMNS = [
   { name: "قیمت تمام‌شده هر واحد (تومان)", field: TX.unitPrice },
 ];
 
-async function buildDetail(env, e, range) {
+async function buildDetail(env, e, range, txType = null) {
   const ent = ENT[e];
   const schema = await getSchema(env, ent.key);
-  const pages = await fetchRows(env, e, range);
+  const pages = await fetchRows(env, e, range, txType);
   const rel = await relationMap(env, schema, pages);
 
   let cols = [
@@ -4520,9 +4598,11 @@ async function buildDetail(env, e, range) {
     lines.push(csvLine(cells));
   }
   return {
-    filename: ent.key + "_detail_" + rangeTag(ent.date ? range : null) + ".csv",
+    filename: ent.key + "_detail_" + rangeTag(ent.date ? range : null) +
+      (txType ? `_type-${transactionTypeCode(txType)}` : "") + ".csv",
     csv: "\uFEFF" + lines.join("\r\n"),
     count: pages.length,
+    ...(txType ? { title: `گزارش ریز تراکنش‌های ${txType} — ${rangeLabel(range)}` } : {}),
   };
 }
 
@@ -4590,12 +4670,12 @@ async function buildExpenseCategoryReport(env, range) {
   };
 }
 
-async function buildSummary(env, e, range, mode) {
+async function buildSummary(env, e, range, mode, txType = null) {
   const ent = ENT[e];
   const g = ent.groups[mode];
   if (!g) throw new Error("نوع گروه‌بندی نامعتبر");
   const schema = await getSchema(env, ent.key);
-  const pages = await fetchRows(env, e, range);
+  const pages = await fetchRows(env, e, range, txType);
   const rel = await relationMap(env, schema, pages);
   const amountName = e === "t" ? TX.amount : ALC.amount;
 
@@ -4636,40 +4716,42 @@ async function buildSummary(env, e, range, mode) {
   const lines = [];
 
   if (e === "t") {
+    const visibleTypes = txType ? [txType] : TX_TYPES;
     const net = (s) =>
       (s["درآمد"] || 0) +
       (s["فروش دارایی"] || 0) -
       (s["هزینه"] || 0) -
       (s["خرید دارایی"] || 0);
-    const totalExpense = rows.reduce((a, r) => a + (r.sums["هزینه"] || 0), 0);
+    const shareType = txType || "هزینه";
+    const shareTotal = rows.reduce((a, r) => a + (r.sums[shareType] || 0), 0);
     if (byTime) rows.sort((a, b) => a.sort.localeCompare(b.sort));
-    else rows.sort((a, b) => (b.sums["هزینه"] || 0) - (a.sums["هزینه"] || 0));
+    else rows.sort((a, b) => (b.sums[shareType] || 0) - (a.sums[shareType] || 0));
 
     const header = [
       "گروه",
       "تعداد",
-      ...TX_TYPES.map((t) => `${t} (تومان)`),
-      "خالص (تومان)",
+      ...visibleTypes.map((t) => `${t} (تومان)`),
     ];
-    if (!byTime) header.push("سهم از هزینه ٪");
+    if (!txType) header.push("خالص (تومان)");
+    if (!byTime) header.push(`سهم از ${shareType} ٪`);
     lines.push(csvLine(header));
     const tot = { label: "جمع کل", count: 0, sums: {} };
     for (const r of rows) {
       tot.count += r.count;
-      for (const t of TX_TYPES)
+      for (const t of visibleTypes)
         tot.sums[t] = (tot.sums[t] || 0) + (r.sums[t] || 0);
     }
     for (const r of [...rows, tot]) {
       const line = [
         r.label,
         r.count,
-        ...TX_TYPES.map((t) => tomanPlain(r.sums[t] || 0)),
-        tomanPlain(net(r.sums)),
+        ...visibleTypes.map((t) => tomanPlain(r.sums[t] || 0)),
       ];
+      if (!txType) line.push(tomanPlain(net(r.sums)));
       if (!byTime)
         line.push(
-          totalExpense
-            ? (((r.sums["هزینه"] || 0) / totalExpense) * 100).toFixed(1)
+          shareTotal
+            ? (((r.sums[shareType] || 0) / shareTotal) * 100).toFixed(1)
             : "0",
         );
       lines.push(csvLine(line));
@@ -4688,9 +4770,10 @@ async function buildSummary(env, e, range, mode) {
     lines.push(csvLine(["جمع کل", c, tomanPlain(s)]));
   }
   return {
-    filename: `${ent.key}_by-${mode}_${rangeTag(range)}.csv`,
+    filename: `${ent.key}_by-${mode}_${rangeTag(range)}${txType ? `_type-${transactionTypeCode(txType)}` : ""}.csv`,
     csv: "\uFEFF" + lines.join("\r\n"),
     count: used,
+    ...(txType ? { title: `گزارش تراکنش‌های ${txType} — ${rangeLabel(range)}` } : {}),
   };
 }
 
