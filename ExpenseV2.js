@@ -392,7 +392,9 @@ async function handleTextMessage(msg, env) {
   }
   if (!state) return sendMainMenu(env, chatId, "از منوی زیر انتخاب کن 👇");
 
-  if ((state.flow === "new" && state.assetFlow) || state.flow === "asset-sale") {
+  if (state.flow === "new" && state.assetFlow)
+    return handleAssetCreateText(env, chatId, state, text);
+  if (state.flow === "asset-sale") {
     await clearState(env, chatId);
     return sendMainMenu(env, chatId, "این عملیات با ساختار جدید دارایی‌ها سازگار نیست؛ از منوی دارایی‌ها دوباره شروع کن.");
   }
@@ -2047,6 +2049,7 @@ async function handleCrud(env, msg, action, args) {
       );
     if (e === "l") return startAllocation(env, msg);
     if (e === "c") return startNewCategory(env, chatId, msg, args[1], args[2]);
+    if (e === "s") return startNewAsset(env, chatId, msg);
     return startNew(env, chatId, msg, e);
   }
 
@@ -2178,10 +2181,8 @@ async function handleCrud(env, msg, action, args) {
       backHome(),
     );
   }
-  if (st.flow === "new" && st.assetFlow) {
-    await clearState(env, chatId);
-    return editPanel(env, msg, "ثبت دارایی را با ساختار جدید جدول دوباره شروع کن.", backHome());
-  }
+  if (st.flow === "new" && st.assetFlow)
+    return handleAssetCreateCallback(env, msg, st, action, args);
   const schema = await getSchema(env, ENT[st.ent].key);
   const p = schema.props.find((x) => x.name === st.propName);
 
