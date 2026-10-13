@@ -5072,23 +5072,40 @@ function propNumber(page, name) {
 function numberFromItem(x) {
   if (!x) return null;
   if (x.type === "number") return x.number;
-  if (x.type === "formula" && x.formula?.type === "number")
-    return x.formula.number;
+  if (x.type === "formula") {
+    if (x.formula?.type === "number") return x.formula.number;
+    if (x.formula?.type === "string") return numberFromText(x.formula.string);
+  }
   if (x.type === "rollup" && x.rollup?.type === "number")
     return x.rollup.number;
   return null;
 }
 
+function numberFromText(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const normalized = value
+    .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0))
+    .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 0x0660))
+    .replace(/[٬,\s]/g, "");
+  const numeric = normalized.match(/-?\d+(?:\.\d+)?/);
+  if (!numeric) return null;
+  const result = Number(numeric[0]);
+  return Number.isFinite(result) ? result : null;
+}
+
 // برای formula/rollup ممکن است مقدار صفحه‌ی query ناقص باشد؛ در این حالت از endpoint دقیق می‌خوانیم.
 async function exactNumber(env, page, name) {
   const p = page.properties?.[name];
-  const direct = propNumber(page, name);
-  if (
-    !p?.id ||
-    !["rollup", "formula"].includes(p.type) ||
-    env.EXACT_ROLLUPS === "0"
-  )
-    return direct;
+  const direct = numberFromItem(p);
+  if (!p || !["rollup", "formula"].includes(p.type)) return direct ?? 0;
+  if (!p.id) {
+    if (direct !== null) return direct;
+    throw new Error(`شناسه‌ی فیلد «${name}» از Notion دریافت نشد`);
+  }
+  if (env.EXACT_ROLLUPS === "0") {
+    if (direct !== null) return direct;
+    throw new Error(`مقدار عددی فیلد «${name}» از Notion دریافت نشد`);
+  }
   try {
     const r = await notion(
       env,
@@ -5100,11 +5117,16 @@ async function exactNumber(env, page, name) {
         const n = numberFromItem(x);
         if (n !== null && n !== undefined) return n;
       }
-      return direct;
+      if (direct !== null) return direct;
+      throw new Error(`فیلد «${name}» در Notion مقدار عددی ندارد`);
     }
-    return numberFromItem(r) ?? direct;
-  } catch {
-    return direct;
+    const exact = numberFromItem(r);
+    if (exact !== null && exact !== undefined) return exact;
+    if (direct !== null) return direct;
+    throw new Error(`فیلد «${name}» در Notion مقدار عددی ندارد`);
+  } catch (error) {
+    if (direct !== null) return direct;
+    throw new Error(`خواندن فیلد «${name}» از Notion ناموفق بود: ${error.message}`);
   }
 }
 
