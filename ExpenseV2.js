@@ -390,19 +390,19 @@ async function handleTextMessage(msg, env) {
       () => {},
     );
   }
-  if (!state) return sendMainMenu(env, chatId, "از منوی زیر انتخاب کن 👇");
+  if (!state) return sendMainMenu(env, chatId, "خب، از کجا شروع کنیم؟ 👇");
 
   if (state.flow === "new" && state.assetFlow)
     return handleAssetCreateText(env, chatId, state, text);
   if (state.flow === "asset-sale") {
     await clearState(env, chatId);
-    return sendMainMenu(env, chatId, "این عملیات با ساختار جدید دارایی‌ها سازگار نیست؛ از منوی دارایی‌ها دوباره شروع کن.");
+    return sendMainMenu(env, chatId, "این مسیر قدیمی شده؛ از منوی دارایی‌ها دوباره شروع کن.");
   }
 
   // ---- ثبت تراکنش ----
   if (state.flow === "tx" && state.step === "title") {
     if (!text || text.length > 200) {
-      return send(env, chatId, "❌ عنوان تراکنش را بین ۱ تا ۲۰۰ نویسه وارد کن؛ مثلاً «خرید هفتگی» یا «حقوق مهرماه».");
+      return send(env, chatId, "❌ عنوان باید بین ۱ تا ۲۰۰ حرف باشه؛ مثلاً «خرید هفتگی».");
     }
     state.draft.title = text;
     state.draft.date = todayTehran();
@@ -437,7 +437,7 @@ async function handleTextMessage(msg, env) {
   // سازگاری با ورودی‌هایی که پیش از انتشار این مسیر شروع شده‌اند.
   if (state.flow === "tx" && state.step === "amount") {
     const amount = parseAmountOnly(text);
-    if (!(amount > 0)) return send(env, chatId, "❌ مبلغ نامعتبر است.");
+    if (!(amount > 0)) return send(env, chatId, "❌ مبلغ باید بیشتر از صفر باشه.");
     state.draft.amount = amount;
     await setState(env, chatId, state);
     return continueTxFlow(env, chatId, state);
@@ -446,7 +446,7 @@ async function handleTextMessage(msg, env) {
   if (state.flow === "tx" && state.step === "assetQty") {
     const qty = parseFloat(toEnDigits(text).replace(",", "."));
     if (!(qty > 0))
-      return send(env, chatId, "❌ مقدار دارایی نامعتبر است. مثال: 0.5");
+      return send(env, chatId, "❌ مقدار رو به‌شکل عدد بفرست؛ مثلاً ۰٫۵.");
     state.draft.assetQty = qty;
     state.draft.unitPrice = Math.round(state.draft.amount / qty);
     state.step = "confirm";
@@ -463,7 +463,7 @@ async function handleTextMessage(msg, env) {
       return send(
         env,
         chatId,
-        `❌ مبلغ از موجودی قابل تخصیص بیشتر است. موجودی: <b>${fmt(state.maxAmount)} تومان</b>`,
+        `❌ این مبلغ از موجودی بیشتره؛ حداکثر <b>${fmt(state.maxAmount)} تومان</b> می‌تونی جابه‌جا کنی.`,
       );
     state.pendingAmount = amount;
     state.step = "amount-review";
@@ -482,14 +482,14 @@ async function handleTextMessage(msg, env) {
       return send(
         env,
         chatId,
-        "❌ درصد را از ۱ تا ۱۰۰ وارد کن؛ مثلاً <code>۲۵</code>.",
+        "❌ درصدی بین ۱ تا ۱۰۰ بفرست؛ مثلاً <code>۲۵</code>.",
       );
     const amount = Math.round((state.maxAmount * percent) / 100);
     if (!(amount > 0))
       return send(
         env,
         chatId,
-        "❌ این درصد از موجودی مبلغ قابل تخصیصی ایجاد نمی‌کند.",
+        "❌ با این درصد مبلغی برای جابه‌جایی درنمیاد؛ درصد بیشتری بزن.",
       );
     state.pendingAmount = amount;
     state.selectedPercent = percent;
@@ -530,7 +530,7 @@ async function handleTextMessage(msg, env) {
       return send(
         env,
         chatId,
-        "❌ بازه نامعتبر است. نمونه‌ها:\n<code>1405/07/12</code>\n<code>1405/07</code>\n<code>1405/07/01 تا 1405/07/15</code>",
+        "❌ قالب تاریخ درست نیست. مثلاً <code>۱۴۰۵/۰۷</code> یا <code>۱۴۰۵/۰۷/۰۱ تا ۱۴۰۵/۰۷/۱۵</code> بفرست.",
       );
     }
     state.range = range;
@@ -542,7 +542,7 @@ async function handleTextMessage(msg, env) {
   return send(
     env,
     chatId,
-    "❌ این مرحله ورودی متنی نمی‌گیرد. لطفاً گزینه‌ی مناسب را از منوی زیر انتخاب کن؛ پیام اشتباهت پاک شد.",
+    "اینجا باید از دکمه‌ها انتخاب کنی 👇",
   );
 }
 
@@ -554,11 +554,11 @@ async function repeatExpectedInput(env, chatId, state) {
 
   if (state.flow === "tx") {
     if (state.step === "title")
-      return prompt("عنوان تراکنش را وارد کن؛ مثلاً «خرید هفتگی» یا «حقوق مهرماه».", "مثلاً خرید هفتگی");
+      return prompt("📝 عنوان تراکنش رو بنویس؛ مثلاً «خرید هفتگی».", "مثلاً خرید هفتگی");
     if (state.step === "amount-input")
       return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
     if (state.step === "assetQty")
-      return prompt("مقدار دارایی را به‌صورت عدد وارد کن؛ مثلاً <code>۰٫۵</code>.", "مثلاً ۰٫۵");
+      return prompt("💎 مقدار دارایی رو به‌صورت عدد بفرست؛ مثلاً <code>۰٫۵</code>.", "مثلاً ۰٫۵");
     if (state.step === "description-input")
       return panel(env, chatId, null, "توضیح را بنویس یا برای رد کردن از دکمه استفاده کن.", {
         inline_keyboard: [[btn("⏭ رد کردن توضیحات", "tx:desc-skip")], [btn("❌ لغو", "tx:cancel")]],
@@ -572,13 +572,13 @@ async function repeatExpectedInput(env, chatId, state) {
     if (["amount-unit", "amount-choice"].includes(state.step))
       return showMoneyUnitChoice(env, chatId, null, "al", "al:cancel");
     if (state.step === "percent-input")
-      return prompt("درصد را از ۱ تا ۱۰۰ وارد کن؛ مثلاً <code>۲۵</code>.", "مثلاً ۲۵");
+      return prompt("درصدی بین ۱ تا ۱۰۰ بفرست؛ مثلاً <code>۲۵</code>.", "مثلاً ۲۵");
     if (state.step === "amount")
-      return prompt("مبلغ را به تومان وارد کن؛ فقط عدد بفرست.", "مثلاً ۵۰۰۰۰۰");
+      return prompt("💰 مبلغ رو به تومان بفرست.", "مثلاً ۵۰۰۰۰۰");
   }
   if (state.flow === "asset-sale") {
     if (state.step === "quantity")
-      return prompt(`مقدار فروخته‌شده را تا حداکثر ${fa(state.asset.qty)} وارد کن.`, "مثلاً ۱");
+      return prompt(`مقدار فروش رو بفرست (حداکثر ${fa(state.asset.qty)}).`, "مثلاً ۱");
     if (["base-price", "proceeds"].includes(state.step))
       return prompt(state.step === "base-price" ? "قیمت پایه‌ی هر واحد را به تومان وارد کن:" : "مبلغ کل فروخته‌شده را به تومان وارد کن:", "مبلغ به تومان");
     if (state.step === "destination")
@@ -586,7 +586,7 @@ async function repeatExpectedInput(env, chatId, state) {
   }
   if (state.flow === "new" && state.assetFlow) {
     if (state.assetStep === "title")
-      return prompt("عنوان دارایی را وارد کن؛ مثلاً «دلار» یا «طلای ۱۸ عیار».", "مثلاً دلار");
+      return prompt("💎 اسم دارایی رو بنویس؛ مثلاً «دلار» یا «طلای ۱۸ عیار».", "مثلاً دلار");
     if (state.assetStep === "description")
       return panel(env, chatId, null, "توضیحات دارایی را وارد کن یا برای رد کردن، «-» بفرست.", {
         inline_keyboard: [[btn("⏭ رد کردن توضیحات", "x:assetdescskip")], [btn("❌ لغو", "x:x")]],
@@ -608,7 +608,7 @@ async function repeatExpectedInput(env, chatId, state) {
       return send(env, chatId, "برای جست‌وجوی مورد مرتبط، نامش را وارد کن.");
   }
   if (state.flow === "report" && state.step === "range")
-    return prompt("بازه‌ی گزارش را وارد کن؛ مثلاً <code>۱۴۰۵/۰۷</code> یا <code>۱۴۰۵/۰۷/۰۱ تا ۱۴۰۵/۰۷/۱۵</code>.");
+      return prompt("📅 بازه‌ی گزارش رو بفرست؛ مثلاً <code>۱۴۰۵/۰۷</code> یا <code>۱۴۰۵/۰۷/۰۱ تا ۱۴۰۵/۰۷/۱۵</code>.");
   return send(env, chatId, "لطفاً گزینه‌ی مناسب را از منوی فعال انتخاب کن.");
 }
 
@@ -729,40 +729,16 @@ async function handleMenu(env, msg, action) {
 function mainMenuText(extra = "") {
   return (
     `${extra ? esc(extra) + "\n\n" : ""}💳 <b>مدیریت مالی شخصی</b>\n\n` +
-    `تراکنش ها، حساب‌ها، باکس‌ها و دارایی‌هایت را یک‌جا مدیریت کن.\n\n` +
-    `برای شروع، یکی از گزینه‌های منو را انتخاب کن 👇`
+    `پول و دارایی‌هات رو راحت مدیریت کن.\n` +
+    `از منو یکی رو انتخاب کن 👇`
   );
 }
 
 function helpText() {
   return (
-    `💳 <b>مدیریت مالی شخصی</b>\n\n` +
-    `<b>همه‌چیز درباره پولت، یکجا.</b>\n\n` +
-    `سلام 👋\n` +
-    `من دستیار مالی تو هستم؛ برای ثبت، مدیریت و تحلیل جریان پول و دارایی‌هات.\n\n` +
-    `━━━━━━━━━━━━━━\n\n` +
-    `⚡ <b>دسترسی سریع</b>\n\n` +
-    `💵 <b>ثبت درآمد</b>\nدریافتی جدیدت رو ثبت کن.\n\n` +
-    `🔄 <b>تخصیص منابع</b>\nپولت رو بین بخش‌های مختلف تقسیم کن.\n\n` +
-    `🛒 <b>ثبت هزینه</b>\nهزینه‌ای که انجام دادی رو ثبت کن.\n\n` +
-    `📈 <b>ثبت سرمایه‌گذاری</b>\nخرید طلا، سهام، ارز یا سایر دارایی‌ها.\n\n` +
-    `━━━━━━━━━━━━━━\n\n` +
-    `📊 <b>نمای کلی مالی</b>\n\n` +
-    `💰 <b>موجودی کل</b>\nمجموع پول قابل استفاده\n\n` +
-    `📦 <b>منابع</b>\nخرج روزانه · رابطه · سرمایه‌گذاری · تعیین‌تکلیف‌نشده\n\n` +
-    `💎 <b>دارایی‌ها</b>\nارزش کل دارایی‌ها و سرمایه‌گذاری‌ها\n\n` +
-    `━━━━━━━━━━━━━━\n\n` +
-    `🧭 <b>چه چیزی می‌خوای ببینی؟</b>\n\n` +
-    `<code>📊 گزارش مالی</code>\n` +
-    `<code>💸 هزینه‌ها</code>\n` +
-    `<code>📈 سرمایه‌گذاری‌ها</code>\n` +
-    `<code>💎 دارایی‌ها</code>\n` +
-    `<code>📦 منابع مالی</code>\n\n` +
-    `━━━━━━━━━━━━━━\n\n` +
-    `🔐 <b>ساده، دقیق، تحت کنترل تو</b>\n\n` +
-    `هر تراکنش ثبت می‌شود،\n` +
-    `هر تخصیص قابل پیگیری است،\n` +
-    `و همیشه می‌توانی تصویر واقعی وضعیت مالی‌ات را ببینی.`
+    `👋 <b>سلام! من دستیار مالی توام.</b>\n\n` +
+    `درآمد و هزینه ثبت کن، پولت رو بین حساب و باکس‌ها جابه‌جا کن و دارایی‌هات رو زیر نظر بگیر.\n\n` +
+    `📊 از «داشبورد مالی» گزارش بگیر؛ برای شروع هم یکی از گزینه‌های منو رو بزن. هرجا گیر کردی، همین‌جام 🙂`
   );
 }
 
@@ -819,16 +795,16 @@ function amountUnitFactor(unit) {
 
 function scaledAmountPrompt(factor) {
   if (factor === 1_000_000)
-    return "💰 مبلغ را به <b>میلیون تومان</b> وارد کن.\n\nمثلاً برای ۳۲ میلیون تومان، عدد <code>۳۲</code> را وارد کن.";
-  return "💰 مبلغ را به <b>هزار تومان</b> وارد کن.\n\nمثلاً برای ۵۰۰ هزار تومان، عدد <code>۵۰۰</code> را وارد کن.";
+    return "💰 مبلغ رو به <b>میلیون تومان</b> بفرست؛ مثلاً <code>۳۲</code> یعنی ۳۲ میلیون.";
+  return "💰 مبلغ رو به <b>هزار تومان</b> بفرست؛ مثلاً <code>۵۰۰</code> یعنی ۵۰۰ هزار.";
 }
 
 function amountReplyNotice() {
-  return "✍️ لطفاً مبلغ را در پیام پاسخ‌گویی که برایت باز می‌شود وارد کن.";
+  return "✍️ مبلغ رو در پیام بعدی بفرست.";
 }
 
 function scaledAmountError(factor) {
-  return `❌ یک عددِ مثبت و بدون واحد وارد کن. عدد باید بر اساس واحد انتخابی (${factor === 1_000_000 ? "میلیون" : "هزار"} تومان) باشد؛ مثلاً <code>${factor === 1_000_000 ? "۳۲" : "۵۰۰"}</code>.`;
+  return `❌ یه عدد مثبت و بدون واحد بفرست؛ به ${factor === 1_000_000 ? "میلیون" : "هزار"} تومان. مثلاً <code>${factor === 1_000_000 ? "۳۲" : "۵۰۰"}</code>.`;
 }
 
 async function showMoneyUnitChoice(
@@ -884,7 +860,7 @@ function sendAmountReview(env, chatId, amount, confirmAction, editAction) {
   return send(
     env,
     chatId,
-    `💰 <b>مبلغ واردشده</b>\n\n<b>${fmt(amount)} تومان</b>\n\nاگر مبلغ درست است تأیید کن تا به مرحله‌ی بعد بروی؛ برای ورود دوباره، اصلاح را بزن.`,
+    `💰 مبلغ: <b>${fmt(amount)} تومان</b>\nدرسته؟ تأیید کن یا اصلاحش کن.`,
     {
       reply_markup: {
         inline_keyboard: [
@@ -913,7 +889,7 @@ async function handleTxCallback(env, msg, action, args) {
     await editPanel(
       env,
       msg,
-      `${TYPE_META[type].icon} <b>ثبت ${esc(type)}</b>\n\nدر چند مرحله عنوان، مبلغ و جزئیات این تراکنش را می‌گیریم. هرجا لازم باشد می‌توانی آن مرحله را رد یا عملیات را لغو کنی.`,
+      `${TYPE_META[type].icon} <b>ثبت ${esc(type)}</b>\nچندتا سؤال کوتاه می‌پرسم و تمومه؛ هرجا خواستی هم می‌تونی لغوش کنی.`,
       { inline_keyboard: [[btn("❌ لغو", "tx:cancel")]] },
     );
     const example = type === "درآمد"
@@ -921,7 +897,7 @@ async function handleTxCallback(env, msg, action, args) {
       : type === "انتقال"
         ? "انتقال به حساب پس‌انداز"
         : "خرید هفتگی";
-    return send(env, chatId, `📝 یک عنوان کوتاه برای ${esc(type)} وارد کن؛ این عنوان بعداً در سوابق و گزارش‌ها دیده می‌شود.\nمثلاً: <code>${example}</code>`, {
+    return send(env, chatId, `📝 یه عنوان کوتاه برای ${esc(type)} بنویس.\nمثلاً: <code>${example}</code>`, {
       reply_markup: {
         force_reply: true,
         input_field_placeholder: "مثلاً خرید روزانه",
@@ -1167,7 +1143,7 @@ function askTxAmount(env, chatId, state) {
     null,
     "tx",
     "tx:cancel",
-    `💵 <b>مبلغ تراکنش «${esc(state.draft.title)}»</b>\nواحدی را انتخاب کن که می‌خواهی مبلغ را با آن وارد کنی. در مرحله‌ی بعد عدد را می‌فرستی؛ مثلاً ۵۰۰ با واحد هزار یعنی ۵۰۰ هزار تومان.`,
+    `💵 مبلغ «${esc(state.draft.title)}» رو با کدوم واحد وارد می‌کنی؟ بعدش فقط عدد رو بفرست.`,
   );
 }
 
@@ -1257,7 +1233,7 @@ async function ensureTransactionFunds(env, chatId, state, msg = null) {
     env,
     chatId,
     msg,
-    `❌ موجودی ${sourceName} برای این پرداخت کافی نیست؛ تراکنش هنوز ثبت نشده است.\nمبلغ تراکنش: <b>${fmt(d.amount)} تومان</b>\nموجودی فعلی: <b>${fmt(balance)} تومان</b>\n\nحساب یا باکس را شارژ کن، یا مبلغ/منبع پرداخت را تغییر بده.`,
+      `❌ موجودی ${sourceName} کمه.\nمبلغ: <b>${fmt(d.amount)} تومان</b> · موجودی: <b>${fmt(balance)} تومان</b>\nحساب/باکس رو شارژ کن یا مبلغ و منبع رو عوض کن.`,
     {
       inline_keyboard: [
         [btn("✏️ تغییر مبلغ", "tx:amount-edit")],
@@ -1283,14 +1259,14 @@ async function choose(
       icon: "🏦",
       text:
         role === "to"
-          ? "🏦 حسابی را انتخاب کن که مبلغ به آن اضافه می‌شود؛ این حساب مقصد تراکنش است."
-          : "🏦 حسابی را انتخاب کن که مبلغ از آن پرداخت می‌شود؛ موجودی این حساب کاهش پیدا می‌کند.",
+          ? "🏦 پول به کدوم حساب اضافه بشه؟"
+          : "🏦 پرداخت از کدوم حساب انجام بشه؟",
       cb: (id) => `tx:acc:${role}:${id}`,
     },
     box: {
       list: async () => await listBoxes(env),
       icon: "📦",
-      text: "📦 اگر هزینه از باکس پرداخت می‌شود، آن را انتخاب کن. در غیر این صورت «رد کردن این مرحله» را بزن تا از حساب استفاده شود.",
+      text: "📦 از باکس پرداخت می‌کنی؟ انتخابش کن؛ وگرنه این مرحله رو رد کن.",
       cb: (id) => `tx:box:${id}`,
     },
     ast: {
@@ -1367,7 +1343,7 @@ async function chooseCategoryRoot(
   rows.push([btn("🔙 انتخاب گروه", `tx:catgroups:${optional ? "1" : "0"}`)]);
   rows.push([btn("❌ لغو", "tx:cancel")]);
   const text = roots.length
-    ? `🏷 <b>دسته‌بندی‌های ${categoryBrowseGroupLabel(group)}</b>\nدسته‌ی کلی را انتخاب کن. بعد می‌توانی یک زیردسته را بزنی یا با همان دسته‌ی کلی ادامه بدهی:`
+    ? `🏷 <b>${categoryBrowseGroupLabel(group)}</b>\nدسته‌ی کلی یا یکی از زیردسته‌ها رو انتخاب کن:`
     : "⚠️ در این گروه دسته‌ی کلی پیدا نشد.";
   return panel(env, chatId, msg, text, { inline_keyboard: rows });
 }
@@ -1392,7 +1368,7 @@ async function chooseCategoryGroups(env, chatId, msg, optional = false) {
   rows.push([btn("❌ لغو", "tx:cancel")]);
   return panel(env, chatId, msg,
     groups.length
-      ? "🏷 <b>انتخاب گروه دسته‌بندی</b>\nگروهی را انتخاب کن که این تراکنش به آن مربوط است؛ بعد دسته‌ی کلی و در صورت نیاز زیردسته را مشخص می‌کنی."
+      ? "🏷 <b>گروه دسته‌بندی رو انتخاب کن</b>\nبعدش دسته‌ی اصلی یا زیردسته رو می‌زنی."
       : "⚠️ دسته‌بندی فعالی پیدا نشد.",
     { inline_keyboard: rows });
 }
@@ -1459,8 +1435,8 @@ async function chooseCategoryChild(
     chatId,
     msg,
     children.length
-      ? `${esc(root.icon)} <b>${esc(root.name)}</b>\nیک زیر‌دسته را انتخاب کن یا ادامه را با همین دسته‌بندی بزن:`
-      : `${esc(root.icon)} <b>${esc(root.name)}</b>\nاین دسته زیر‌دسته‌ای ندارد؛ می‌توانی با همین دسته‌بندی ادامه بدهی.`,
+      ? `${esc(root.icon)} <b>${esc(root.name)}</b>\nزیردسته رو انتخاب کن یا با همین دسته ادامه بده:`
+      : `${esc(root.icon)} <b>${esc(root.name)}</b>\nزیردسته‌ای نداره؛ با همین دسته ادامه بده.`,
     { inline_keyboard: rows },
   );
 }
@@ -1471,7 +1447,7 @@ async function sendTxConfirm(env, chatId, state, msg = null) {
   const lines = [
     `${TYPE_META[d.type].icon} <b>مرور و ثبت تراکنش</b>`,
     "",
-    "عنوان، مبلغ، مبدأ یا مقصد و دسته‌بندی را بررسی کن. تاریخ ثبت به‌صورت خودکار تعیین می‌شود.",
+    "یه نگاه آخر بنداز و ثبتش کن 👇",
     "",
     `نوع: ${esc(d.type)}`,
     `عنوان: ${esc(d.title)}`,
@@ -3042,7 +3018,7 @@ async function handleAssetCreateText(env, chatId, state, text) {
       env,
       chatId,
       null,
-      "توضیحات دارایی را وارد کن؛ اگر توضیحی نداری «-» بفرست.",
+      "📝 توضیحی برای دارایی داری؟ بنویس؛ نداری «-» بفرست.",
       {
         inline_keyboard: [
           [btn("⏭ رد کردن توضیحات", "x:assetdescskip")],
@@ -3068,7 +3044,7 @@ async function handleAssetCreateText(env, chatId, state, text) {
     return send(
       env,
       chatId,
-      `قیمت هر واحد در زمان خرید ثبت شد: <b>${fmt(price)} تومان</b>.\nمقدار دارایی را وارد کن:`,
+      `قیمت خرید هر واحد: <b>${fmt(price)} تومان</b> ✅\nحالا مقدار دارایی رو بفرست:`,
       {
         reply_markup: { force_reply: true, input_field_placeholder: "مثلاً ۷" },
       },
@@ -3080,7 +3056,7 @@ async function handleAssetCreateText(env, chatId, state, text) {
       return send(
         env,
         chatId,
-        "مقدار دارایی باید عددی بزرگ‌تر از صفر باشد؛ مثلاً <code>۰٫۵</code>.",
+        "❌ مقدار باید عددی بیشتر از صفر باشه؛ مثلاً <code>۰٫۵</code>.",
       );
     asset.qty = qty;
     state.assetStep = "cost-unit";
@@ -3091,7 +3067,7 @@ async function handleAssetCreateText(env, chatId, state, text) {
       null,
       "x",
       "x:x",
-      "💰 مبلغ نهایی خرید را به چه واحدی وارد می‌کنی؟ این مبلغ به‌عنوان هزینه‌ی تراکنش ثبت و از باکس یا حساب انتخابی کسر می‌شود:",
+      "💰 مبلغ نهایی خرید رو با کدوم واحد وارد می‌کنی؟ این مبلغ به‌عنوان هزینه ثبت می‌شه.",
     );
   }
   if (state.assetStep === "cost-input") {
@@ -3159,7 +3135,7 @@ async function showAssetCategoryChoices(env, chatId, msg, state, page = 0) {
       env,
       chatId,
       msg,
-      "برای ثبت دارایی، ابتدا یک دسته‌بندی از گروه سرمایه‌گذاری در بخش دسته‌بندی‌ها بساز.",
+      "اول از بخش دسته‌بندی‌ها، یک دسته از گروه سرمایه‌گذاری بساز 🙂",
       { inline_keyboard: rows },
     );
   }
@@ -3168,7 +3144,7 @@ async function showAssetCategoryChoices(env, chatId, msg, state, page = 0) {
     env,
     chatId,
     msg,
-    "🏷 دسته‌بندی سرمایه‌گذاری این دارایی را انتخاب کن:",
+    "🏷 دسته‌بندی سرمایه‌گذاری دارایی رو انتخاب کن:",
     { inline_keyboard: rows },
   );
 }
@@ -3186,8 +3162,8 @@ function showAssetTypeChoices(env, chatId, msg, state) {
     chatId,
     msg,
     options.length
-      ? "نوع دارایی را انتخاب کن یا این مرحله را رد کن:"
-      : "برای نوع دارایی گزینه‌ای تعریف نشده؛ می‌توانی این مرحله را رد کنی:",
+      ? "نوع دارایی رو انتخاب کن یا ردش کن:"
+      : "نوعی تعریف نشده؛ این مرحله رو رد کن:",
     { inline_keyboard: rows },
   );
 }
@@ -3203,7 +3179,7 @@ async function showAssetFundingChoices(env, chatId, msg, state) {
     env,
     chatId,
     msg,
-    "منبع پرداخت مبلغ خرید را انتخاب کن. با انتخاب باکس، مبلغ فقط از همان باکس کم می‌شود؛ در غیر این صورت حساب را انتخاب می‌کنی.",
+    "💳 هزینه‌ی خرید از کجا پرداخت شد؟",
     { inline_keyboard: rows },
   );
 }
@@ -3219,10 +3195,10 @@ async function showAssetAccountChoices(env, chatId, msg) {
       env,
       chatId,
       msg,
-      "حساب فعالی برای ثبت هزینه‌ی خرید پیدا نشد.",
+      "حساب فعالی برای پرداخت خرید پیدا نکردم.",
       backHome(),
     );
-  return panel(env, chatId, msg, "هزینه‌ی خرید از کدام حساب پرداخت شد؟", {
+  return panel(env, chatId, msg, "🏦 کدوم حساب هزینه‌ی خرید رو پرداخت کرد؟", {
     inline_keyboard: rows,
   });
 }
@@ -3300,7 +3276,7 @@ async function handleAssetCreateCallback(env, msg, state, action, args) {
       msg,
       "x",
       "x:x",
-      "واحد قیمت هر واحد دارایی در زمان خرید را انتخاب کن. این قیمت به‌عنوان قیمت اولیه دارایی هم ثبت می‌شود:",
+      "💰 واحد قیمت هر واحد در زمان خرید رو انتخاب کن:",
     );
   }
   if (action === "assetbox" && state.assetStep === "box") {
@@ -3334,7 +3310,7 @@ function sendAssetCreateConfirm(env, chatId, msg, state) {
   const a = state.asset;
   const value = Math.round(a.currentPrice * a.qty);
   const lines = [
-    "💎 <b>تأیید ثبت دارایی و خرید</b>",
+    "💎 <b>دارایی و خرید آماده‌ی ثبتن!</b>",
     "",
     `عنوان: ${esc(a.title)}`,
     a.description ? `توضیحات: ${esc(a.description)}` : null,
@@ -3342,10 +3318,10 @@ function sendAssetCreateConfirm(env, chatId, msg, state) {
     a.category
       ? "دسته‌بندی سرمایه‌گذاری: " + esc((a.category.icon ? a.category.icon + " " : "") + a.category.name)
       : null,
-    `قیمت هر واحد در زمان خرید: <b>${fmt(a.currentPrice)} تومان</b>`,
+    `قیمت خرید هر واحد: <b>${fmt(a.currentPrice)} تومان</b>`,
     `مقدار: <b>${fa(a.qty)}</b>`,
     `ارزش روز دارایی: <b>${fmt(value)} تومان</b>`,
-    `مبلغ نهایی خرید و تراکنش خودکار: <b>${fmt(a.cost)} تومان</b>`,
+    `مبلغ نهایی خرید: <b>${fmt(a.cost)} تومان</b> · تراکنش خرید خودکار ثبت می‌شه`,
     a.box
       ? `پرداخت از باکس: ${esc(a.box.name)}`
       : `پرداخت از حساب: ${esc(a.account?.name || "")}`,
@@ -3476,7 +3452,7 @@ async function ensureAssetPurchaseFunds(env, chatId, msg, state) {
     env,
     chatId,
     msg,
-    `❌ موجودی ${sourceName} کافی نیست.\nمبلغ خرید: <b>${fmt(a.cost)} تومان</b>\nموجودی فعلی: <b>${fmt(balance)} تومان</b>\n\nحساب یا باکس را شارژ کن، یا مبلغ/منبع پرداخت را تغییر بده.`,
+    `❌ موجودی ${sourceName} کمه.\nهزینه: <b>${fmt(a.cost)} تومان</b> · موجودی: <b>${fmt(balance)} تومان</b>\nحساب/باکس رو شارژ کن یا مبلغ و منبع رو عوض کن.`,
     {
       inline_keyboard: [
         [btn("✏️ تغییر مبلغ خرید", "x:assetcostedit")],
@@ -4081,7 +4057,7 @@ function reportTableMenu(env, chatId, msg) {
     env,
     chatId,
     msg,
-    "📤 <b>گزارش‌ساز مالی</b>\n\n<b>۱. موضوع گزارش را انتخاب کن</b>\nبعد بازه، نوع گزارش و قالب فایل را مشخص می‌کنی.\n\n💰 مبلغ‌ها به تومان و تاریخ‌ها شمسی هستند.",
+    "📤 <b>گزارش‌ساز</b>\nگزارش موردنظرت رو انتخاب کن؛ مبلغ‌ها تومانی و تاریخ‌ها شمسی‌ان.",
     { inline_keyboard: rows },
   );
 }
@@ -4140,7 +4116,7 @@ async function handleReportCallback(env, msg, action, args) {
       return send(
         env,
         chatId,
-        "✍️ روز، ماه یا بازه را بفرست:\n<code>1405/07/12</code>\n<code>1405/07</code>\n<code>1405/07/01 تا 1405/07/15</code>",
+        "📅 روز، ماه یا بازه رو بفرست؛ مثلاً:\n<code>۱۴۰۵/۰۷</code> یا <code>۱۴۰۵/۰۷/۰۱ تا ۱۴۰۵/۰۷/۱۵</code>",
         { reply_markup: { force_reply: true } },
       );
     }
@@ -4260,20 +4236,19 @@ async function afterRange(env, chatId, msg, st) {
     env,
     chatId,
     msg,
-    `📤 <b>${esc(ENT[st.ent].fa)}</b>\n📅 بازه: ${rangeLabel(st.range)}\n\n<b>۳. نوع گزارش را انتخاب کن</b>`,
+    `📤 <b>${esc(ENT[st.ent].fa)}</b> · ${rangeLabel(st.range)}\nنوع گزارش رو انتخاب کن:`,
     { inline_keyboard: rows },
   );
 }
 
 function reportFormatMenu(env, chatId, msg, st) {
   const title = st.ent === "all" ? "همه‌ی بخش‌ها" : ENT[st.ent].fa;
-  const step = st.ent === "all" ? "۳" : ENT[st.ent].date ? "۴" : "۲";
   if (st.expenseCategory)
     return panel(
       env,
       chatId,
       msg,
-      `📎 <b>قالب گزارش هزینه‌ها</b>\n${rangeLabel(st.range)}\n\nنمودار دسته‌بندی‌ها را به‌صورت PDF دریافت کن:`,
+      `📎 <b>گزارش هزینه‌ها</b> · ${rangeLabel(st.range)}\nنمودار رو به‌صورت PDF بگیر:`,
       {
         inline_keyboard: [
           [btn("📄 دریافت گزارش PDF", "r:f:pdf")],
@@ -4285,7 +4260,7 @@ function reportFormatMenu(env, chatId, msg, st) {
     env,
     chatId,
     msg,
-    `📎 <b>${step}. قالب فایل</b>\n${esc(title)}\n📅 ${rangeLabel(st.range)}\n\nفایل موردنظرت را انتخاب کن:`,
+    `📎 <b>قالب فایل</b>\n${esc(title)} · ${rangeLabel(st.range)}\nکدوم فایل رو می‌خوای؟`,
     {
       inline_keyboard: [
         [btn("📊 فایل CSV", "r:f:csv"), btn("📄 فایل PDF", "r:f:pdf")],
