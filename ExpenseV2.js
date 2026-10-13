@@ -2299,11 +2299,12 @@ async function listEntity(env, chatId, msg, e, page = 0) {
         ? rawName.replace(/→/g, "\u200E←\u200E")
         : rawName;
       const brief = await briefOf(env, e, p);
+      const description = e === "b" ? boxDescriptionFromPage(p) : "";
       return [
         btn(
           trunc(
-            `${brief.icon} ${name}${brief.text ? " · " + brief.text : ""}`,
-            58,
+            `${brief.icon} ${name}${brief.text ? " · " + brief.text : ""}${description ? " · " + description : ""}`,
+            e === "b" ? 100 : 58,
           ),
           `x:v:${e}:${compactId(p.id)}`,
         ),
@@ -4454,12 +4455,10 @@ async function buildDetail(env, e, range) {
     ),
   ];
   if (e === "b") {
-    const priority = [BOX.title, BOX.balance, BOX.desc];
-    cols.sort((a, b) => {
-      const ai = priority.indexOf(a.name);
-      const bi = priority.indexOf(b.name);
-      return (ai < 0 ? priority.length : ai) - (bi < 0 ? priority.length : bi);
-    });
+    const rank = (p) =>
+      p.name === BOX.title ? 0 : p.name === BOX.balance ? 1 :
+      /توضیح/.test(p.name) ? 2 : 3;
+    cols.sort((a, b) => rank(a) - rank(b));
   }
 
   // برای جدول‌های کوچک، مقدارهای دقیق rollup/formula پولی را جدا می‌گیریم
@@ -4800,7 +4799,10 @@ function preparePdfReport(report, ent, mode) {
         .trim(),
     }))
     .filter(
-      ({ canonicalName }) => mode !== "detail" || allowed.has(canonicalName),
+      ({ canonicalName }) =>
+        mode !== "detail" ||
+        allowed.has(canonicalName) ||
+        (ent.key === "boxes" && /توضیح/.test(canonicalName)),
     );
   if (!kept.length) return report;
   const outputRows = [
@@ -5052,6 +5054,14 @@ const propText = (page, name) =>
     .map((x) => x.plain_text)
     .join("")
     .trim();
+function boxDescriptionFromPage(page) {
+  for (const [name, property] of Object.entries(page.properties || {})) {
+    if (!/توضیح/.test(name) || property.type !== "rich_text") continue;
+    const text = propText(page, name);
+    if (text) return text;
+  }
+  return "";
+}
 const propChoice = (page, name) => {
   const p = page.properties?.[name];
   return (
