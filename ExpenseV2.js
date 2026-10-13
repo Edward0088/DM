@@ -4450,7 +4450,8 @@ async function buildDetail(env, e, range) {
   let cols = [
     ...schema.props.filter((p) => p.type === "title"),
     ...schema.props.filter(
-      (p) => p.type !== "title" && p.type !== "files" && !isHiddenField(e, p),
+      (p) => p.type !== "title" &&
+        (e === "t" || (p.type !== "files" && !isHiddenField(e, p))),
     ),
   ];
   if (e === "b") {
@@ -4813,6 +4814,7 @@ function preparePdfReport(report, ent, mode) {
     .filter(
       ({ canonicalName }) =>
         mode !== "detail" ||
+        ent.key === "transactions" ||
         allowed.has(canonicalName) ||
         (ent.key === "boxes" && /توضیح/.test(canonicalName)),
     );
@@ -4832,6 +4834,7 @@ function preparePdfReport(report, ent, mode) {
     ...report,
     csv: "\uFEFF" + outputRows.map(csvLine).join("\r\n"),
     count: rows.length,
+    fullTransactionDetail: ent.key === "transactions" && mode === "detail",
   };
 }
 
@@ -4854,6 +4857,15 @@ function reportHtml(report, ent, label, fonts = null) {
       return `<tr${totalRow ? ' class="total"' : ""}>${r.map((x) => `<td>${htmlEsc(x)}</td>`).join("")}</tr>`;
     })
     .join("");
+  const detailCards = report.fullTransactionDetail
+    ? rows.map((row, index) => {
+        const title = row[head.indexOf(TX.title)] || `تراکنش ${fa(index + 1)}`;
+        const fields = head.map((name, column) =>
+          `<div class="detail-field"><div class="detail-label">${htmlEsc(name)}</div><div class="detail-value">${htmlEsc(row[column] || "—")}</div></div>`,
+        ).join("");
+        return `<article class="detail-card"><h2>${fa(index + 1)}. ${htmlEsc(title)}</h2><div class="detail-grid">${fields}</div></article>`;
+      }).join("")
+    : "";
   const barColors = [
     "#0ea5e9", "#6366f1", "#8b5cf6", "#ec4899", "#f97316", "#14b8a6",
   ];
@@ -4873,10 +4885,11 @@ function reportHtml(report, ent, label, fonts = null) {
     @page{size:A4 landscape;margin:14mm}*{box-sizing:border-box}body{font-family:ShabnamFD,Tahoma,Arial,sans-serif;color:#172033;margin:0;direction:rtl;font-size:11px}
     .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;padding:0 0 12px;border-bottom:2px solid #dbe6f1}.title{font-size:22px;font-weight:700;color:#163b65}.meta{font-size:11px;color:#64748b;background:#f1f5f9;border-radius:8px;padding:6px 10px}
     .chart{margin:0 0 18px;padding:14px 16px;border:1px solid #dbe6f1;border-radius:12px;background:linear-gradient(135deg,#f8fbff,#eef6ff)}.chart h2{margin:0 0 12px;font-size:15px;color:#163b65}.chart-rows{display:grid;gap:7px}.chart-row{display:grid;grid-template-columns:minmax(100px,1.2fr) minmax(120px,4fr) minmax(105px,1fr);align-items:center;gap:10px;min-height:20px;break-inside:avoid}.chart-label{font-weight:700;color:#334155;overflow-wrap:anywhere}.chart-track{height:12px;background:#e2e8f0;border-radius:999px;overflow:hidden;direction:rtl}.chart-bar{height:100%;border-radius:999px;print-color-adjust:exact;-webkit-print-color-adjust:exact}.chart-value{direction:rtl;text-align:left;font-weight:700;color:#0f172a;white-space:nowrap}.chart-value small{font-size:9px;color:#64748b}
+    .detail-card{margin:0 0 12px;border:1px solid #d9e2ec;border-radius:11px;overflow:hidden;break-inside:avoid}.detail-card h2{margin:0;padding:9px 12px;background:#163b65;color:#fff;font-size:13px}.detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;background:#fff}.detail-field{padding:8px 10px;border-left:1px solid #e5eaf0;border-bottom:1px solid #e5eaf0;min-height:48px;overflow-wrap:anywhere}.detail-label{color:#64748b;font-size:9px;margin-bottom:4px}.detail-value{color:#172033;font-weight:700;white-space:pre-wrap}
     table{width:100%;border-collapse:collapse;font-size:10px;direction:rtl}thead{display:table-header-group}th{background:#163b65;color:#fff;font-weight:700}th,td{border:1px solid #d9e2ec;padding:7px;text-align:right;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere}tr:nth-child(even) td{background:#f4f7fb}tr{break-inside:avoid}.total td{background:#eaf2fa!important;font-weight:700;color:#163b65}
     .foot{margin-top:12px;padding-top:8px;border-top:1px solid #d9e2ec;font-size:9px;color:#64748b;display:flex;justify-content:space-between}
   </style></head><body><div class="head"><div class="title">${htmlEsc(report.title || `${ent.icon} گزارش ${ent.fa}`)}</div><div class="meta">بازه: ${htmlEsc(label)}</div></div>
-  ${chart}<table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table><div class="foot"><span>${htmlEsc(fa(report.count))} ردیف · مبالغ به تومان</span><span>قلم Shabnam FD · Saber Rastikerdar · SIL OFL 1.1</span></div></body></html>`;
+  ${chart}${report.fullTransactionDetail ? detailCards : `<table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>`}<div class="foot"><span>${htmlEsc(fa(report.count))} ردیف · مبالغ به تومان</span><span>قلم Shabnam FD · Saber Rastikerdar · SIL OFL 1.1</span></div></body></html>`;
 }
 
 let shabnamFdFontsPromise;
@@ -4957,6 +4970,10 @@ function propPlain(p) {
       return (p.title || []).map((x) => x.plain_text).join("");
     case "rich_text":
       return (p.rich_text || []).map((x) => x.plain_text).join("");
+    case "files":
+      return (p.files || [])
+        .map((file) => [file.name, file.file?.url || file.external?.url].filter(Boolean).join(": "))
+        .join("؛ ");
     case "number":
       return p.number;
     case "string":
@@ -4987,6 +5004,9 @@ function propPlain(p) {
       return { start: p.last_edited_time };
     case "people":
       return (p.people || []).map((x) => x.name).join("، ");
+    case "created_by":
+    case "last_edited_by":
+      return p[p.type]?.name || p[p.type]?.id || "";
     case "unique_id":
       return `${p.unique_id?.prefix ? p.unique_id.prefix + "-" : ""}${p.unique_id?.number ?? ""}`;
     case "formula":
