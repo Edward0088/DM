@@ -4488,18 +4488,37 @@ async function assetPurchaseMap(env, assets) {
   return byAsset;
 }
 
-const ASSET_PURCHASE_REPORT_COLUMNS = [
-  { name: "تاریخ خرید" },
-  { name: "ارزش دارایی هنگام خرید (تومان)", field: TX.assetValueAtPurchase },
-  { name: "مبلغ خرید (تومان)", field: TX.amount },
-  { name: "قیمت تمام‌شده هر واحد (تومان)", field: TX.unitPrice },
-];
+const ASSET_PURCHASE_PRICE = "قیمت زمان خرید";
+const ASSET_FINAL_AMOUNT_COLUMN = "مبلغ نهایی خرید (تومان)";
+
+function assetPurchaseTotals(purchases) {
+  let quantity = 0;
+  let value = 0;
+  let amount = 0;
+  let fallbackPrice = 0;
+  for (const purchase of purchases || []) {
+    const qty = propNumber(purchase, TX.assetQty);
+    const unitPrice = propNumber(purchase, TX.unitPrice);
+    const purchaseValue = propNumber(purchase, TX.assetValueAtPurchase);
+    amount += propNumber(purchase, TX.amount);
+    if (qty > 0) {
+      quantity += qty;
+      value += purchaseValue > 0 ? purchaseValue : unitPrice * qty;
+    }
+    if (unitPrice > 0) fallbackPrice = unitPrice;
+  }
+  return {
+    price: quantity > 0 && value > 0 ? Math.round(value / quantity) : fallbackPrice,
+    amount,
+  };
+}
 
 async function buildDetail(env, e, range, txType = null) {
   const ent = ENT[e];
   const schema = await getSchema(env, ent.key);
   const pages = await fetchRows(env, e, range, txType);
   const rel = await relationMap(env, schema, pages);
+  const assetPurchases = e === "s" ? await assetPurchaseMap(env, pages) : null;
 
   let cols = [
     ...schema.props.filter((p) => p.type === "title"),
@@ -4560,10 +4579,22 @@ async function buildDetail(env, e, range, txType = null) {
   const header = cols.map((p) =>
     isMoneyField(e, p.name) ? p.name + " (تومان)" : p.name,
   );
+  const purchasePriceIndex = e === "s"
+    ? cols.findIndex((p) => p.name === ASSET_PURCHASE_PRICE)
+    : -1;
+  const purchaseAmountIndex = purchasePriceIndex >= 0
+    ? purchasePriceIndex + 1
+    : header.length;
+  if (e === "s") header.splice(purchaseAmountIndex, 0, ASSET_FINAL_AMOUNT_COLUMN);
   const lines = [csvLine(header)];
   for (const pg of pages) {
+    const purchase = e === "s"
+      ? assetPurchaseTotals(assetPurchases.get(compactId(pg.id)))
+      : null;
     const cells = cols.map((p) => {
       const money = isMoneyField(e, p.name);
+      if (e === "s" && p.name === ASSET_PURCHASE_PRICE && purchase.price > 0)
+        return tomanPlain(purchase.price);
       const key = pg.id + "|" + p.name;
       if (money && exact.has(key)) {
         const toman = tomanPlain(exact.get(key));
@@ -4571,6 +4602,9 @@ async function buildDetail(env, e, range, txType = null) {
       }
       return cellText(pg, p, { money, rel, csv: true });
     });
+    if (e === "s")
+      cells.splice(purchaseAmountIndex, 0,
+        assetPurchases.has(compactId(pg.id)) ? tomanPlain(purchase.amount) : "");
     lines.push(csvLine(cells));
   }
   return {
@@ -4829,6 +4863,7 @@ const PDF_DETAIL_COLUMNS = {
     AST.unit,
     "مقدار",
     "قیمت زمان خرید",
+    "مبلغ نهایی خرید",
     "تاریخ خرید",
     AST.category,
     "توضیحات",
