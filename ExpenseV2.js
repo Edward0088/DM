@@ -2489,7 +2489,7 @@ async function briefOf(env, e, p) {
   if (e === "b")
     return {
       icon: "📦",
-      text: `${fmt(await exactNumber(env, p, BOX.balance))} ت`,
+      text: `${fmt(await boxBalanceFromPage(env, p))} ت`,
     };
   if (e === "s")
     return {
@@ -2563,6 +2563,8 @@ async function showItem(env, chatId, msg, e, id, note = "") {
     let text;
     if (e === "a" && p.name === ACC.balance) {
       text = fmt(await accountBalanceFromPage(env, page));
+    } else if (e === "b" && p.name === BOX.balance) {
+      text = fmt(await boxBalanceFromPage(env, page));
     } else if (money && (p.type === "formula" || p.type === "rollup")) {
       text = fmt(await exactNumber(env, page, p.name));
     } else {
@@ -3939,18 +3941,17 @@ async function showOverview(env, msg) {
       listCategories(env, true),
     ]);
 
-  const sum = async (pages, name, activeName) => {
-    const act = pages.filter((p) => propCheckbox(p, activeName) !== false);
-    const nums = await Promise.all(act.map((p) => exactNumber(env, p, name)));
-    return nums.reduce((a, b) => a + b, 0);
-  };
   const [cash, boxTotal] = await Promise.all([
     Promise.all(
       accounts
         .filter((p) => propCheckbox(p, ACC.active) !== false)
         .map((p) => accountBalanceFromPage(env, p)),
     ).then((values) => values.reduce((total, value) => total + value, 0)),
-    sum(boxes, BOX.balance, BOX.active),
+    Promise.all(
+      boxes
+        .filter((p) => propCheckbox(p, BOX.active) !== false)
+        .map((p) => boxBalanceFromPage(env, p)),
+    ).then((values) => values.reduce((total, value) => total + value, 0)),
   ]);
 
   const stat = (txs) => {
@@ -5582,7 +5583,66 @@ async function getUnallocatedBox(env) {
 async function getBoxBalance(env, id) {
   const boxes = await queryDb(env, "boxes");
   const page = boxes.find((x) => idEq(x.id, id));
-  return page ? exactNumber(env, page, BOX.balance) : 0;
+  return page ? boxBalanceFromPage(env, page) : 0;
+}
+
+async function boxBalanceFromPage(env, page) {
+  const boxId = page.id;
+  const [allocations, transactions] = await Promise.all([
+    queryDb(env, "allocations", {
+      filter: {
+        or: [
+          { property: ALC.fromBox, relation: { contains: boxId } },
+          { property: ALC.toBox, relation: { contains: boxId } },
+        ],
+      },
+      limit: 1000,
+    }),
+    queryDb(env, "transactions", {
+      filter: {
+        or: [
+          { property: TX.fromBox, relation: { contains: boxId } },
+          { property: TX.toBox, relation: { contains: boxId } },
+        ],
+      },
+      limit: 1000,
+    }),
+  ]);
+
+  let balance = 0;
+  for (const allocation of allocations) {
+    const status = propChoice(allocation, ALC.status);
+    if (status && status !== "ثبت‌شده") continue;
+    const amount = propNumber(allocation, ALC.amount);
+    const fromBox = (allocation.properties?.[ALC.fromBox]?.relation || [])
+      .some((relation) => idEq(relation.id, boxId));
+    const toBox = (allocation.properties?.[ALC.toBox]?.relation || [])
+      .some((relation) => idEq(relation.id, boxId));
+    if (fromBox) balance -= amount;
+    if (toBox) balance += amount;
+  }
+
+  for (const transaction of transactions) {
+    const status = propChoice(transaction, TX.status);
+    if (status && status !== "ثبت‌شده") continue;
+    const type = propChoice(transaction, TX.type);
+    if (type === "انتقال") continue;
+
+    const amount = propNumber(transaction, TX.amount);
+    const fromBox = (transaction.properties?.[TX.fromBox]?.relation || [])
+      .some((relation) => idEq(relation.id, boxId));
+    const toBox = (transaction.properties?.[TX.toBox]?.relation || [])
+      .some((relation) => idEq(relation.id, boxId));
+    if (type === "هزینه" || type === "خرید دارایی") {
+      if (fromBox) balance -= amount;
+    } else if (type === "درآمد" || type === "فروش دارایی") {
+      if (toBox) balance += amount;
+    } else if (type === "اصلاح") {
+      if (toBox) balance += amount;
+      else if (fromBox) balance -= amount;
+    }
+  }
+  return balance;
 }
 
 async function checkConnections(env) {
