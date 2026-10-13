@@ -683,7 +683,7 @@ async function handleMenu(env, msg, action) {
     return editPanel(
       env,
       msg,
-      "💳 <b>تراکنش‌ها</b>\nدرآمد و هزینه‌هایت را ثبت کن یا سوابق تراکنش‌ها را ببین.\nاز کدام گزینه شروع کنیم؟",
+      "💳 <b>تراکنش‌ها</b>\n\nتراکنش تازه ثبت کن، سوابق را موردبه‌مورد ببین یا گزارش ردیفی PDF و CSV بگیر.",
       transactionsKeyboard(),
     );
   if (action === "allocations")
@@ -762,8 +762,9 @@ function mainMenuKeyboard() {
 function transactionsKeyboard() {
   return {
     inline_keyboard: [
-      [btn("➕ تراکنش جدید", "m:new")],
-      [btn("📒 سوابق تراکنش‌ها", "m:txhistory")],
+      [btn("➕ ثبت تراکنش جدید", "m:new")],
+      [btn("📋 مشاهده سوابق", "m:txhistory"), btn("📄 گزارش ردیفی", "r:t:t")],
+      [btn("📊 هزینه‌ها به تفکیک دسته‌بندی", "r:ec")],
       [btn("🏠 منوی اصلی", "m:home")],
     ],
   };
@@ -784,7 +785,7 @@ function txTypeKeyboard() {
     inline_keyboard: [
       [btn("💸 هزینه", "tx:type:هزینه"), btn("💰 درآمد", "tx:type:درآمد")],
       [btn("🔁 انتقال", "tx:type:انتقال")],
-      [btn("🏠 بازگشت", "m:home")],
+      [btn("🔙 تراکنش‌ها", "m:transactions")],
     ],
   };
 }
@@ -2359,8 +2360,11 @@ async function listEntity(env, chatId, msg, e, page = 0, txType = null) {
     : [...buttons];
   if (nav.length) kb.push(nav);
   const addLabel = e === "s" ? "➕ افزودن دارایی" : `➕ ${ent.one} جدید`;
-  kb.push([btn(addLabel, `x:n:${e}`), btn("📤 CSV", `r:t:${e}`)]);
-  kb.push([btn("🏠 منوی اصلی", "m:home")]);
+  kb.push([
+    btn(e === "t" ? "➕ ثبت تراکنش" : addLabel, `x:n:${e}`),
+    btn(e === "t" ? "📄 گزارش ردیفی" : "📤 CSV", `r:t:${e}`),
+  ]);
+  kb.push([btn(e === "t" ? "🔙 تراکنش‌ها" : "🏠 منوی اصلی", e === "t" ? "m:transactions" : "m:home")]);
 
   const text =
     `${ent.icon} <b>${esc(ent.fa)}</b> — صفحه ${fa(page + 1)}\n` +
@@ -4255,33 +4259,39 @@ async function afterRange(env, chatId, msg, st) {
     await setState(env, chatId, st);
     return reportFormatMenu(env, chatId, msg, st);
   }
+  if (st.ent === "t") {
+    st.mode = "detail";
+    await setState(env, chatId, st);
+    return transactionReportTypeMenu(env, chatId, msg, st);
+  }
   return reportModeMenu(env, chatId, msg, st);
 }
 
 function transactionReportTypeMenu(env, chatId, msg, st) {
   const reportName = st.mode === "detail"
-    ? "ریز کامل"
-    : ENT.t.groups[st.mode]?.label || "گزارش";
+    ? "ردیفی"
+    : `جمع‌بندی ${ENT.t.groups[st.mode]?.label || "تراکنش‌ها"}`;
   const rows = [
     [btn("📋 همه‌ی نوع‌ها", "r:tt:0")],
     ...chunk(TX_TYPES.map((type, index) =>
       btn(`${TYPE_META[type].icon} ${type}`, `r:tt:${index + 1}`),
     ), 2),
-    [btn("🔙 انتخاب گزارش", "r:tm"), btn("🏠 منو", "m:home")],
+    [btn("📊 جمع‌بندی و گروه‌بندی", "r:tm")],
+    [btn("🔙 انتخاب بازه", "r:t:t"), btn("🏠 منو", "m:home")],
   ];
   return panel(env, chatId, msg,
-    `💳 <b>نوع تراکنش گزارش ${esc(reportName)}</b> · ${rangeLabel(st.range)}\nکدوم تراکنش‌ها رو می‌خوای ببینی؟`,
+    `💳 <b>گزارش ${esc(reportName)}</b> · ${rangeLabel(st.range)}\nنوع تراکنش‌ها را انتخاب کن:`,
     { inline_keyboard: rows });
 }
 
 function reportModeMenu(env, chatId, msg, st) {
   const groups = ENT[st.ent].groups || {};
-  const rows = [[btn("📄 ریز کامل (همه‌ی ستون‌ها)", "r:o:detail")]];
+  const rows = [[btn(st.ent === "t" ? "📄 گزارش ردیفی (هر تراکنش یک ردیف)" : "📄 ریز کامل (همه‌ی ستون‌ها)", "r:o:detail")]];
   const gb = Object.entries(groups).map(([k, g]) =>
-    btn(`${g.label}`, `r:o:${k}`),
+    btn(`${st.ent === "t" ? "مجموع " : ""}${g.label}`, `r:o:${k}`),
   );
   if (gb.length) {
-    rows.push([btn("— خلاصه به تفکیک —", "m:noop")]);
+    rows.push([btn(st.ent === "t" ? "— جمع‌بندی مبلغ‌ها —" : "— خلاصه به تفکیک —", "m:noop")]);
     rows.push(...chunk(gb, 2));
   }
   if (st.ent === "t") rows.push([btn("🔙 انتخاب بازه", "r:t:t")]);
@@ -4290,13 +4300,17 @@ function reportModeMenu(env, chatId, msg, st) {
     env,
     chatId,
     msg,
-    `📤 <b>${esc(ENT[st.ent].fa)}</b> · ${rangeLabel(st.range)}${st.ent === "t" ? "\nنوع تراکنش: " + esc(st.txType || "همه") : ""}\nنوع گزارش رو انتخاب کن:`,
+    `📤 <b>${esc(ENT[st.ent].fa)}</b> · ${rangeLabel(st.range)}${st.ent === "t" ? "\nگزارش ردیفی، هر تراکنش را جدا نشان می‌دهد؛ گزینه‌های مجموع، مبلغ‌ها را جمع می‌کنند." : "\nنوع گزارش رو انتخاب کن:"}`,
     { inline_keyboard: rows },
   );
 }
 
 function reportFormatMenu(env, chatId, msg, st) {
-  const title = st.ent === "all" ? "همه‌ی بخش‌ها" : ENT[st.ent].fa;
+  const title = st.ent === "all"
+    ? "همه‌ی بخش‌ها"
+    : st.ent === "t"
+      ? st.mode === "detail" ? "گزارش ردیفی تراکنش‌ها" : `جمع‌بندی ${ENT.t.groups[st.mode]?.label || "تراکنش‌ها"}`
+      : ENT[st.ent].fa;
   if (st.expenseCategory)
     return panel(
       env,
