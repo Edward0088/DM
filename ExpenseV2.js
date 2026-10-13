@@ -1499,11 +1499,13 @@ async function sendTxConfirm(env, chatId, state, msg = null) {
 }
 
 async function saveTransaction(env, d) {
-  if (d.type === "درآمد") {
+  if (d.type === "درآمد" && !d.accountCharge) {
     const mainAccount = await findMainAccount(env);
     if (d.box || !mainAccount || !d.toAccount || !idEq(d.toAccount.id, mainAccount.id))
       throw new Error("درآمد فقط به حساب اصلی واریز می‌شود؛ برای باکس از تخصیص استفاده کن.");
   }
+  if (d.type === "درآمد" && d.accountCharge && (!d.toAccount || d.box))
+    throw new Error("حساب مقصد شارژ معتبر نیست.");
   const boxReplacesAccount = Boolean(d.box && TYPE_META[d.type].optionalBox);
   const props = {
     [TX.title]: titleProp(d.title),
@@ -1999,9 +2001,9 @@ async function handleCrud(env, msg, action, args) {
   if (action === "charge") {
     const entity = args.length > 1 ? args[0] : "a";
     const id = args.length > 1 ? args[1] : args[0];
-    const target = await findMainAccount(env);
-    if (entity !== "a" || !target || !idEq(target.id, id))
-      return editPanel(env, msg, "فقط حساب اصلی شارژ می‌شود. برای افزایش موجودی باکس، تخصیص از حساب اصلی ثبت کن.", backHome());
+    const target = (await listAccounts(env)).find((account) => idEq(account.id, id));
+    if (entity !== "a" || !target)
+      return editPanel(env, msg, "این حساب پیدا نشد یا غیرفعال است.", backHome());
     await setState(env, chatId, {
       flow: "tx",
       step: "title",
@@ -2579,7 +2581,6 @@ async function showItem(env, chatId, msg, e, id, note = "") {
   }
 
   const cid = compactId(id);
-  const mainAccount = e === "a" ? await findMainAccount(env) : null;
   const categoryParentId =
     e === "c" ? page.properties?.[CAT.parent]?.relation?.[0]?.id : null;
   const backToList =
@@ -2588,8 +2589,7 @@ async function showItem(env, chatId, msg, e, id, note = "") {
       : `x:l:${e}:0`;
   const kb = {
     inline_keyboard: [
-      ...(e === "a" && mainAccount && idEq(id, mainAccount.id)
-        ? [[btn("💰 شارژ حساب", `x:charge:a:${cid}`)]] : []),
+      ...(e === "a" ? [[btn("💰 شارژ حساب", `x:charge:a:${cid}`)]] : []),
       ...(e === "b" ? [
         [btn("🎯 تخصیص به باکس", `al:start-box:${cid}`)],
         [btn("➕ افزودن باکس جدید", "x:n:b")],
