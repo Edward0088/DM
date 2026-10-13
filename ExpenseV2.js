@@ -1506,17 +1506,18 @@ async function saveTransaction(env, d) {
   if (d.asset) {
     const schema = await getSchema(env, "transactions");
     const assetRelation = schema.props.find((p) =>
-      p.name === TX.asset && p.type === "relation" &&
-      p.relDb && idEq(p.relDb, dbId(env, "assets")),
+      p.name === TX.asset && p.type === "relation",
     );
     const assetQty = schema.props.find((p) => p.name === TX.assetQty && p.type === "number");
     const unitPrice = schema.props.find((p) => p.name === TX.unitPrice && p.type === "number");
     const purchaseValue = schema.props.find((p) =>
       p.name === TX.assetValueAtPurchase && p.type === "number",
     );
-    if (assetRelation) props[TX.asset] = relationProp(d.asset.id);
-    if (assetQty && d.assetQty) props[TX.assetQty] = { number: d.assetQty };
-    if (unitPrice && d.unitPrice) props[TX.unitPrice] = { number: d.unitPrice };
+    if (!assetRelation || !assetQty || !unitPrice)
+      throw new Error("ستون‌های رابطهٔ دارایی، مقدار دارایی و قیمت واحد در جدول تراکنش‌ها کامل نیستند.");
+    props[TX.asset] = relationProp(d.asset.id);
+    if (d.assetQty) props[TX.assetQty] = { number: d.assetQty };
+    if (d.unitPrice) props[TX.unitPrice] = { number: d.unitPrice };
     if (purchaseValue && d.assetValueAtPurchase)
       props[TX.assetValueAtPurchase] = { number: d.assetValueAtPurchase };
   }
@@ -3020,11 +3021,26 @@ async function startNewAsset(env, chatId, msg) {
       (p) => p.name === AST.active && p.type === "checkbox",
     ),
   };
-  if (!fields.title || !fields.qty || !fields.price)
+  if (!fields.title)
     return editPanel(
       env,
       msg,
-      "❌ برای ثبت دارایی، ستون‌های عنوان، مقدار و قیمت زمان خرید باید در پایگاه‌داده دارایی‌ها وجود داشته باشند.",
+      "❌ ستون عنوان در پایگاه‌داده دارایی‌ها پیدا نشد.",
+      backHome(),
+    );
+
+  const transactionSchema = await getSchema(env, "transactions");
+  const requiredTransactionFields = [
+    [TX.asset, "relation"],
+    [TX.assetQty, "number"],
+    [TX.unitPrice, "number"],
+  ];
+  if (requiredTransactionFields.some(([name, type]) =>
+    !transactionSchema.props.some((p) => p.name === name && p.type === type)))
+    return editPanel(
+      env,
+      msg,
+      "❌ ستون‌های رابطهٔ دارایی، مقدار دارایی و قیمت واحد در جدول تراکنش‌ها کامل نیستند.",
       backHome(),
     );
 
@@ -3387,9 +3403,9 @@ async function saveNewAssetAndPurchase(env, chatId, msg, state) {
   const typeField = fields.type;
   const properties = {
     [fields.title.name]: titleProp(a.title),
-    [fields.qty.name]: { number: a.qty },
-    [fields.price.name]: { number: a.currentPrice },
   };
+  if (fields.qty) properties[fields.qty.name] = { number: a.qty };
+  if (fields.price) properties[fields.price.name] = { number: a.currentPrice };
   if (a.type && typeField)
     properties[AST.type] =
       typeField.type === "status"
