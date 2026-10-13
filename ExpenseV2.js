@@ -5098,11 +5098,12 @@ function numberFromText(value) {
 }
 
 // برای formula/rollup ممکن است مقدار صفحه‌ی query ناقص باشد؛ در این حالت از endpoint دقیق می‌خوانیم.
-async function exactNumber(env, page, name) {
+async function exactNumber(env, page, name, { strict = false } = {}) {
   const p = page.properties?.[name];
   const direct = numberFromItem(p);
+  const fallback = () => direct ?? 0;
   const reportBalance = (value, source, resultType = null) => {
-    if (name === ACC.balance) {
+    if (strict && name === ACC.balance) {
       console.log("account-balance-read", {
         source,
         propertyType: p?.type || null,
@@ -5118,6 +5119,7 @@ async function exactNumber(env, page, name) {
     return reportBalance(direct ?? 0, p ? "query-property" : "missing-property", p?.type);
   if (!p.id) {
     if (direct !== null) return reportBalance(direct, "query", p.formula?.type);
+    if (!strict) return fallback();
     throw new Error(`شناسه‌ی فیلد «${name}» از Notion دریافت نشد`);
   }
   try {
@@ -5133,16 +5135,19 @@ async function exactNumber(env, page, name) {
           return reportBalance(n, "property-list", x.formula?.type || x.type);
       }
       if (direct !== null) return reportBalance(direct, "query-fallback", p.formula?.type);
+      if (!strict) return fallback();
       throw new Error(`فیلد «${name}» در Notion مقدار عددی ندارد`);
     }
     const exact = numberFromItem(r);
     if (exact !== null && exact !== undefined)
       return reportBalance(exact, "property-item", r.formula?.type || r.type);
     if (direct !== null) return reportBalance(direct, "query-fallback", p.formula?.type);
+    if (!strict) return fallback();
     throw new Error(`فیلد «${name}» در Notion مقدار عددی ندارد`);
   } catch (error) {
     if (direct !== null) return reportBalance(direct, "query-fallback", p.formula?.type);
-    if (name === ACC.balance)
+    if (!strict) return fallback();
+    if (strict && name === ACC.balance)
       console.log("account-balance-read-failed", {
         propertyType: p?.type || null,
         formulaType: p?.formula?.type || null,
@@ -5328,7 +5333,7 @@ async function getAccountBalance(env, id) {
 }
 
 async function accountBalanceFromPage(env, page) {
-  return exactNumber(env, page, ACC.balance);
+  return exactNumber(env, page, ACC.balance, { strict: true });
 }
 
 async function findMainAccount(env) {
