@@ -5097,9 +5097,23 @@ function numberFromText(value) {
 async function exactNumber(env, page, name) {
   const p = page.properties?.[name];
   const direct = numberFromItem(p);
-  if (!p || !["rollup", "formula"].includes(p.type)) return direct ?? 0;
+  const reportBalance = (value, source, resultType = null) => {
+    if (name === ACC.balance) {
+      console.log("account-balance-read", {
+        source,
+        propertyType: p?.type || null,
+        formulaType: p?.formula?.type || null,
+        resultType,
+        isZero: value === 0,
+        isPositive: typeof value === "number" && value > 0,
+      });
+    }
+    return value;
+  };
+  if (!p || !["rollup", "formula"].includes(p.type))
+    return reportBalance(direct ?? 0, p ? "query-property" : "missing-property", p?.type);
   if (!p.id) {
-    if (direct !== null) return direct;
+    if (direct !== null) return reportBalance(direct, "query", p.formula?.type);
     throw new Error(`شناسه‌ی فیلد «${name}» از Notion دریافت نشد`);
   }
   try {
@@ -5111,17 +5125,26 @@ async function exactNumber(env, page, name) {
     if (r.object === "list") {
       for (const x of r.results || []) {
         const n = numberFromItem(x);
-        if (n !== null && n !== undefined) return n;
+        if (n !== null && n !== undefined)
+          return reportBalance(n, "property-list", x.formula?.type || x.type);
       }
-      if (direct !== null) return direct;
+      if (direct !== null) return reportBalance(direct, "query-fallback", p.formula?.type);
       throw new Error(`فیلد «${name}» در Notion مقدار عددی ندارد`);
     }
     const exact = numberFromItem(r);
-    if (exact !== null && exact !== undefined) return exact;
-    if (direct !== null) return direct;
+    if (exact !== null && exact !== undefined)
+      return reportBalance(exact, "property-item", r.formula?.type || r.type);
+    if (direct !== null) return reportBalance(direct, "query-fallback", p.formula?.type);
     throw new Error(`فیلد «${name}» در Notion مقدار عددی ندارد`);
   } catch (error) {
-    if (direct !== null) return direct;
+    if (direct !== null) return reportBalance(direct, "query-fallback", p.formula?.type);
+    if (name === ACC.balance)
+      console.log("account-balance-read-failed", {
+        propertyType: p?.type || null,
+        formulaType: p?.formula?.type || null,
+        errorType: error?.name || "Error",
+        hasMessage: !!error?.message,
+      });
     throw new Error(`خواندن فیلد «${name}» از Notion ناموفق بود: ${error.message}`);
   }
 }
