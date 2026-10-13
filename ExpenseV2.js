@@ -593,11 +593,7 @@ async function repeatExpectedInput(env, chatId, state) {
       return panel(env, chatId, null, "توضیحات دارایی را بنویس یا روی دکمهٔ «رد کردن توضیحات» بزن.", {
         inline_keyboard: [[btn("⏭ رد کردن توضیحات", "x:assetdescskip")], [btn("❌ لغو", "x:x")]],
       });
-    if (state.assetStep === "price-input")
-      return state.moneyUnitFactor
-        ? sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor)
-        : sendAssetUnitPricePrompt(env, chatId);
-    if (state.assetStep === "cost-input")
+    if (["price-input", "cost-input"].includes(state.assetStep))
       return sendScaledAmountPrompt(env, chatId, state.moneyUnitFactor);
     if (state.assetStep === "quantity")
       return prompt("مقدار دارایی را به‌صورت عدد وارد کن؛ مثلاً <code>۰٫۵</code>.", "مثلاً ۰٫۵");
@@ -3095,13 +3091,9 @@ async function handleAssetCreateText(env, chatId, state, text) {
     return showAssetCategoryChoices(env, chatId, null, state);
   }
   if (state.assetStep === "price-input") {
-    const price = state.moneyUnitFactor
-      ? parseScaledAmount(text, state.moneyUnitFactor)
-      : parseAmountStrict(text);
+    const price = parseScaledAmount(text, state.moneyUnitFactor);
     if (!(price > 0))
-      return send(env, chatId, state.moneyUnitFactor
-        ? scaledAmountError(state.moneyUnitFactor)
-        : "❌ قیمت هر واحد را به‌صورت عددی مثبت و به تومان وارد کن.");
+      return send(env, chatId, scaledAmountError(state.moneyUnitFactor));
     asset.currentPrice = price;
     state.assetStep = "quantity";
     delete state.moneyUnitFactor;
@@ -3150,15 +3142,6 @@ async function handleAssetCreateText(env, chatId, state, text) {
     chatId,
     "برای ادامه از دکمه‌های پیام استفاده کن یا /cancel را بزن.",
   );
-}
-
-function sendAssetUnitPricePrompt(env, chatId) {
-  return send(env, chatId, "💰 ارزش (قیمت) هر واحد در زمان خرید رو به تومان وارد کن:", {
-    reply_markup: {
-      force_reply: true,
-      input_field_placeholder: "مثلاً ۵۰۰٬۰۰۰",
-    },
-  });
 }
 
 async function assetInvestmentCategories(env) {
@@ -3313,10 +3296,16 @@ async function handleAssetCreateCallback(env, msg, state, action, args) {
     );
     if (!category) return showAssetCategoryChoices(env, chatId, msg, state);
     state.asset.category = category;
-    state.assetStep = "price-input";
-    delete state.moneyUnitFactor;
+    state.assetStep = "price-unit";
     await setState(env, chatId, state);
-    return sendAssetUnitPricePrompt(env, chatId);
+    return showMoneyUnitChoice(
+      env,
+      chatId,
+      msg,
+      "x",
+      "x:x",
+      "💰 ارزش قیمت هر واحد در زمان خرید رو وارد کن:",
+    );
   }
   if (action === "assetbox" && state.assetStep === "box") {
     const box = (await listBoxes(env)).find((x) => idEq(x.id, args[0]));
