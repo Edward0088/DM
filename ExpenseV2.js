@@ -4466,6 +4466,7 @@ async function buildDetail(env, e, range) {
     const need = cols.filter(
       (p) =>
         isMoneyField(e, p.name) &&
+        !(e === "b" && p.name === BOX.balance) &&
         (p.type === "rollup" || p.type === "formula"),
     );
     const jobs = [];
@@ -4491,6 +4492,15 @@ async function buildDetail(env, e, range) {
       }),
     );
   }
+  if (e === "b") {
+    for (let i = 0; i < pages.length; i += 5) {
+      await Promise.all(
+        pages.slice(i, i + 5).map(async (pg) => {
+          exact.set(`${pg.id}|${BOX.balance}`, await boxBalanceFromPage(env, pg));
+        }),
+      );
+    }
+  }
 
   const header = cols.map((p) =>
     isMoneyField(e, p.name) ? p.name + " (تومان)" : p.name,
@@ -4500,7 +4510,10 @@ async function buildDetail(env, e, range) {
     const cells = cols.map((p) => {
       const money = isMoneyField(e, p.name);
       const key = pg.id + "|" + p.name;
-      if (money && exact.has(key)) return tomanPlain(exact.get(key));
+      if (money && exact.has(key)) {
+        const toman = tomanPlain(exact.get(key));
+        return e === "b" && p.name === BOX.balance ? grp(toman) : toman;
+      }
       return cellText(pg, p, { money, rel, csv: true });
     });
     lines.push(csvLine(cells));
