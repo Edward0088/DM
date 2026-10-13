@@ -2725,8 +2725,8 @@ async function askField(env, chatId, msg, st, p, mode) {
   st.propName = p.name;
   st.opts = null;
   const displayName =
-    st.ent === "a" && p.name === "مانده اولیه"
-      ? "موجودی حساب"
+    st.ent === "a" && isAccountInitialBalanceField(st.ent, p.name)
+      ? "موجودی اولیه حساب"
       : categoryFieldLabel(st.ent, p);
   const head = `${mode === "new" ? "➕" : "✏️"} <b>${esc(displayName)}</b>`;
   const isMoney = p.type === "number" && isMoneyField(st.ent, p.name);
@@ -2761,7 +2761,11 @@ async function askField(env, chatId, msg, st, p, mode) {
       st.opts.map((o, i) => btn(o, `x:o:${i}`)),
       2,
     );
-    return panel(env, chatId, msg, `${head}\nیک گزینه انتخاب کن:`, {
+    const prompt =
+      st.ent === "a" && p.name === ACC.type
+        ? "لطفاً نوع این حساب را انتخاب کن:"
+        : "یک گزینه انتخاب کن:";
+    return panel(env, chatId, msg, `${head}\n${prompt}`, {
       inline_keyboard: [...rows, tail, cancelRow].filter((r) => r.length),
     });
   }
@@ -2809,9 +2813,9 @@ async function askField(env, chatId, msg, st, p, mode) {
     email: "ایمیل را بفرست.",
     phone_number: "شماره را بفرست.",
   };
-  if (st.ent === "a" && p.name === "مانده اولیه") {
+  if (st.ent === "a" && isAccountInitialBalanceField(st.ent, p.name)) {
     hints.number =
-      "موجودی حساب را به <b>تومان</b> بفرست. مثال: <code>۲۵۰٬۰۰۰ تومان</code>";
+      "موجودی اولیه حساب را به <b>تومان</b> بفرست. مثال: <code>۲۵۰٬۰۰۰ تومان</code>";
   }
   if (st.ent === "b" && p.name === BOX.title) {
     hints.title =
@@ -3632,8 +3636,8 @@ async function advanceNew(env, chatId, msg, st) {
     const displayName =
       st.ent === "c" && categoryHierarchyField(p.name) === "parent"
         ? "دسته‌ی کلی"
-        : st.ent === "a" && ["مانده اولیه", ACC.balance].includes(p.name)
-        ? "موجودی حساب"
+        : st.ent === "a" && isAccountInitialBalanceField(st.ent, p.name)
+        ? "موجودی اولیه حساب"
         : st.ent === "b" && p.name === BOX.title
           ? "نام باکس"
           : st.ent === "b" && p.type === "rich_text" && /توضیح/.test(p.name)
@@ -5181,12 +5185,19 @@ function isHiddenField(e, p) {
 }
 
 function isMoneyField(e, name) {
-  return ENT[e].money.includes(name) || (e === "a" && name === "مانده اولیه");
+  return (
+    ENT[e].money.includes(name) ||
+    isAccountInitialBalanceField(e, name)
+  );
+}
+
+function isAccountInitialBalanceField(e, name) {
+  return e === "a" && ["مانده اولیه", "موجودی اولیه"].includes(name);
 }
 
 function isHiddenAccountDetailField(e, p) {
   if (e !== "a") return false;
-  return p.name === "مانده اولیه";
+  return isAccountInitialBalanceField(e, p.name);
 }
 
 function isAccountOpeningDateField(p) {
