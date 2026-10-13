@@ -591,7 +591,7 @@ async function repeatExpectedInput(env, chatId, state) {
     if (state.assetStep === "title")
       return prompt("💎 اسم دارایی رو بنویس؛ مثلاً «دلار» یا «طلای ۱۸ عیار».", "مثلاً دلار");
     if (state.assetStep === "description")
-      return panel(env, chatId, null, "توضیحات دارایی را وارد کن یا برای رد کردن، «-» بفرست.", {
+      return panel(env, chatId, null, "توضیحات دارایی را بنویس یا روی دکمهٔ «رد کردن توضیحات» بزن.", {
         inline_keyboard: [[btn("⏭ رد کردن توضیحات", "x:assetdescskip")], [btn("❌ لغو", "x:x")]],
       });
     if (["price-input", "cost-input"].includes(state.assetStep))
@@ -3079,7 +3079,7 @@ async function handleAssetCreateText(env, chatId, state, text) {
       env,
       chatId,
       null,
-      "📝 توضیحی برای دارایی داری؟ بنویس؛ نداری «-» بفرست.",
+      "📝 توضیحی برای دارایی داری؟ بنویس؛ اگر نه، روی دکمهٔ «رد کردن توضیحات» بزن.",
       {
         inline_keyboard: [
           [btn("⏭ رد کردن توضیحات", "x:assetdescskip")],
