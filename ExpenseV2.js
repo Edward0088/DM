@@ -57,6 +57,7 @@ const TX = {
 const ACC = {
   title: "حساب",
   balance: "موجودی",
+  initialBalance: "موجودی اولیه",
   currency: "ارز",
   type: "نوع حساب",
   active: "فعال",
@@ -5333,7 +5334,43 @@ async function getAccountBalance(env, id) {
 }
 
 async function accountBalanceFromPage(env, page) {
-  return exactNumber(env, page, ACC.balance, { strict: true });
+  const initialBalance = propNumber(page, ACC.initialBalance);
+  const accountId = page.id;
+  const transactions = await queryDb(env, "transactions", {
+    filter: {
+      or: [
+        { property: TX.fromAccount, relation: { contains: accountId } },
+        { property: TX.toAccount, relation: { contains: accountId } },
+      ],
+    },
+    limit: 1000,
+  });
+
+  let balance = initialBalance;
+  for (const transaction of transactions) {
+    const status = propChoice(transaction, TX.status);
+    if (status && status !== "ثبت‌شده") continue;
+
+    const type = propChoice(transaction, TX.type);
+    const amount = propNumber(transaction, TX.amount);
+    const fromAccount = (transaction.properties?.[TX.fromAccount]?.relation || [])
+      .some((relation) => idEq(relation.id, accountId));
+    const toAccount = (transaction.properties?.[TX.toAccount]?.relation || [])
+      .some((relation) => idEq(relation.id, accountId));
+
+    if (type === "درآمد" || type === "فروش دارایی") {
+      if (toAccount) balance += amount;
+    } else if (type === "هزینه" || type === "خرید دارایی") {
+      if (fromAccount) balance -= amount;
+    } else if (type === "انتقال") {
+      if (fromAccount) balance -= amount;
+      if (toAccount) balance += amount;
+    } else if (type === "اصلاح") {
+      if (toAccount) balance += amount;
+      else if (fromAccount) balance -= amount;
+    }
+  }
+  return balance;
 }
 
 async function findMainAccount(env) {
