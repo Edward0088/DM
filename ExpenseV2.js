@@ -4732,6 +4732,10 @@ async function buildDetail(env, e, range, txType = null) {
       /توضیح/.test(p.name) ? 2 : 3;
     cols.sort((a, b) => rank(a) - rank(b));
   }
+  if (e === "t") {
+    const dateIndex = cols.findIndex((p) => p.name === TX.date);
+    if (dateIndex > 0) cols.unshift(cols.splice(dateIndex, 1)[0]);
+  }
 
   // برای جدول‌های کوچک، مقدارهای دقیق rollup/formula پولی را جدا می‌گیریم
   const exact = new Map();
@@ -4778,6 +4782,8 @@ async function buildDetail(env, e, range, txType = null) {
   const header = cols.map((p) =>
     isMoneyField(e, p.name) ? p.name + " (تومان)" : p.name,
   );
+  const transactionTimeline = e === "t" && cols[0]?.name === TX.date;
+  if (transactionTimeline) header.splice(1, 0, "روز هفته", "هفته ماه");
   const purchasePriceIndex = e === "s"
     ? cols.findIndex((p) => p.name === ASSET_PURCHASE_PRICE)
     : -1;
@@ -4801,6 +4807,11 @@ async function buildDetail(env, e, range, txType = null) {
       }
       return cellText(pg, p, { money, rel, csv: true });
     });
+    if (transactionTimeline) {
+      const date = pg.properties?.[TX.date]?.date?.start?.slice(0, 10);
+      const calendar = date ? transactionDayInMonth(date) : null;
+      cells.splice(1, 0, calendar?.weekday || "", calendar?.week || "");
+    }
     if (e === "s")
       cells.splice(purchaseAmountIndex, 0,
         assetPurchases.has(compactId(pg.id)) ? tomanPlain(purchase.amount) : "");
@@ -5094,6 +5105,37 @@ function preparePdfReport(report, ent, mode) {
     };
   }
   const header = rows.shift() || [];
+  if (ent.key === "transactions" && mode === "detail") {
+    const column = (name) => header.findIndex((value) =>
+      value.trim().replace(/\s*\(تومان\)\s*$/, "") === name,
+    );
+    const value = (row, name) => row[column(name)] || "";
+    const timelineRows = rows.map((row) => [
+      fa(value(row, TX.date)),
+      value(row, "روز هفته"),
+      fa(value(row, "هفته ماه")),
+      value(row, TX.title),
+      value(row, TX.type),
+      [
+        value(row, TX.category),
+        [value(row, TX.asset), value(row, TX.assetQty)].filter(Boolean).join(" "),
+      ].filter(Boolean).join(" / "),
+      formatPdfToman(value(row, TX.amount)),
+      [value(row, TX.fromAccount), value(row, TX.fromBox)].filter(Boolean).join(" / "),
+      [value(row, TX.toAccount), value(row, TX.toBox)].filter(Boolean).join(" / "),
+      value(row, TX.desc),
+    ]);
+    return {
+      ...report,
+      csv: "\uFEFF" + [
+        [TX.date, "روز هفته", "هفته ماه", TX.title, TX.type, "دسته / دارایی",
+          `${TX.amount} (تومان)`, "از", "به", TX.desc],
+        ...timelineRows,
+      ].map(csvLine).join("\r\n"),
+      count: timelineRows.length,
+      transactionTimeline: true,
+    };
+  }
   const allowed = new Set(PDF_DETAIL_COLUMNS[ent.key] || []);
   const kept = header
     .map((name, index) => ({
@@ -5127,7 +5169,6 @@ function preparePdfReport(report, ent, mode) {
     ...report,
     csv: "\uFEFF" + outputRows.map(csvLine).join("\r\n"),
     count: rows.length,
-    fullTransactionDetail: ent.key === "transactions" && mode === "detail",
   };
 }
 
@@ -5144,20 +5185,26 @@ function reportHtml(report, ent, label, fonts = null) {
   const rows = parseCsvRows(report.csv);
   const head = rows.shift() || [];
   const th = head.map((x) => `<th>${htmlEsc(x)}</th>`).join("");
+  let lastTimelineWeek = "";
   const body = rows
     .map((r) => {
       const totalRow = r[0] === "جمع کل هزینه‌ها";
-      return `<tr${totalRow ? ' class="total"' : ""}>${r.map((x) => `<td>${htmlEsc(x)}</td>`).join("")}</tr>`;
+      let weekHeading = "";
+      if (report.transactionTimeline) {
+        const date = toEnDigits(r[0] || "").match(/^(\d{4})\/(\d{1,2})/);
+        const week = Number(toEnDigits(r[2] || ""));
+        const key = date && week ? `${date[1]}-${date[2]}-${week}` : "";
+        if (key && key !== lastTimelineWeek) {
+          weekHeading = `<tr class="timeline-week"><td colspan="${head.length}">${htmlEsc(MONTHS[Number(date[2]) - 1] || "")} ${htmlEsc(fa(date[1]))} · هفتهٔ ${htmlEsc(fa(week))}</td></tr>`;
+          lastTimelineWeek = key;
+        }
+      }
+      return weekHeading + `<tr${totalRow ? ' class="total"' : ""}>${r.map((x) => `<td>${htmlEsc(x)}</td>`).join("")}</tr>`;
     })
     .join("");
-  const detailCards = report.fullTransactionDetail
-    ? rows.map((row, index) => {
-        const title = row[head.indexOf(TX.title)] || `تراکنش ${fa(index + 1)}`;
-        const fields = head.map((name, column) =>
-          `<div class="detail-field"><div class="detail-label">${htmlEsc(name)}</div><div class="detail-value">${htmlEsc(row[column] || "—")}</div></div>`,
-        ).join("");
-        return `<article class="detail-card"><h2>${fa(index + 1)}. ${htmlEsc(title)}</h2><div class="detail-grid">${fields}</div></article>`;
-      }).join("")
+  const timelineCols = report.transactionTimeline
+    ? `<colgroup>${[10, 7, 7, 13, 8, 10, 10, 10, 10, 15]
+        .map((width) => `<col style="width:${width}%">`).join("")}</colgroup>`
     : "";
   const barColors = [
     "#0ea5e9", "#6366f1", "#8b5cf6", "#ec4899", "#f97316", "#14b8a6",
@@ -5178,11 +5225,11 @@ function reportHtml(report, ent, label, fonts = null) {
     @page{size:A4 landscape;margin:14mm}*{box-sizing:border-box}body{font-family:ShabnamFD,Tahoma,Arial,sans-serif;color:#172033;margin:0;direction:rtl;font-size:11px}
     .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;padding:0 0 12px;border-bottom:2px solid #dbe6f1}.title{font-size:22px;font-weight:700;color:#163b65}.meta{font-size:11px;color:#64748b;background:#f1f5f9;border-radius:8px;padding:6px 10px}
     .chart{margin:0 0 18px;padding:14px 16px;border:1px solid #dbe6f1;border-radius:12px;background:linear-gradient(135deg,#f8fbff,#eef6ff)}.chart h2{margin:0 0 12px;font-size:15px;color:#163b65}.chart-rows{display:grid;gap:7px}.chart-row{display:grid;grid-template-columns:minmax(100px,1.2fr) minmax(120px,4fr) minmax(105px,1fr);align-items:center;gap:10px;min-height:20px;break-inside:avoid}.chart-label{font-weight:700;color:#334155;overflow-wrap:anywhere}.chart-track{height:12px;background:#e2e8f0;border-radius:999px;overflow:hidden;direction:rtl}.chart-bar{height:100%;border-radius:999px;print-color-adjust:exact;-webkit-print-color-adjust:exact}.chart-value{direction:rtl;text-align:left;font-weight:700;color:#0f172a;white-space:nowrap}.chart-value small{font-size:9px;color:#64748b}
-    .detail-card{margin:0 0 12px;border:1px solid #d9e2ec;border-radius:11px;overflow:hidden;break-inside:avoid}.detail-card h2{margin:0;padding:9px 12px;background:#163b65;color:#fff;font-size:13px}.detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;background:#fff}.detail-field{padding:8px 10px;border-left:1px solid #e5eaf0;border-bottom:1px solid #e5eaf0;min-height:48px;overflow-wrap:anywhere}.detail-label{color:#64748b;font-size:9px;margin-bottom:4px}.detail-value{color:#172033;font-weight:700;white-space:pre-wrap}
     table{width:100%;border-collapse:collapse;font-size:10px;direction:rtl}thead{display:table-header-group}th{background:#163b65;color:#fff;font-weight:700}th,td{border:1px solid #d9e2ec;padding:7px;text-align:right;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere}tr:nth-child(even) td{background:#f4f7fb}tr{break-inside:avoid}.total td{background:#eaf2fa!important;font-weight:700;color:#163b65}
+    .timeline-note{margin:0 0 10px;color:#475569;font-size:10px}.transaction-timeline{table-layout:fixed;font-size:9px}.transaction-timeline th,.transaction-timeline td{padding:6px;line-height:1.5}.transaction-timeline .timeline-week td{background:#dceaf7!important;color:#163b65;font-weight:700;font-size:10px;break-after:avoid}
     .foot{margin-top:12px;padding-top:8px;border-top:1px solid #d9e2ec;font-size:9px;color:#64748b;display:flex;justify-content:space-between}
   </style></head><body><div class="head"><div class="title">${htmlEsc(report.title || `${ent.icon} گزارش ${ent.fa}`)}</div><div class="meta">بازه: ${htmlEsc(label)}</div></div>
-  ${chart}${report.fullTransactionDetail ? detailCards : `<table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>`}<div class="foot"><span>${htmlEsc(fa(report.count))} ردیف · مبالغ به تومان</span><span>قلم Shabnam FD · Saber Rastikerdar · SIL OFL 1.1</span></div></body></html>`;
+  ${chart}${report.transactionTimeline ? '<p class="timeline-note">هفته‌ها از شنبه شروع می‌شوند؛ هفتهٔ ۱ شامل روز اول ماه است.</p>' : ""}<table${report.transactionTimeline ? ' class="transaction-timeline"' : ""}>${timelineCols}<thead><tr>${th}</tr></thead><tbody>${body}</tbody></table><div class="foot"><span>${htmlEsc(fa(report.count))} ردیف · مبالغ به تومان</span><span>قلم Shabnam FD · Saber Rastikerdar · SIL OFL 1.1</span></div></body></html>`;
 }
 
 let shabnamFdFontsPromise;
@@ -6610,6 +6657,17 @@ function tehranParts(ts) {
 }
 
 const isoToJalali = (iso) => gregorianToJalali(...iso.split("-").map(Number));
+
+function transactionDayInMonth(iso) {
+  const [year, month, day] = isoToJalali(iso);
+  const weekday = new Date(`${iso}T00:00:00Z`).getUTCDay();
+  const first = gIso(jalaliToGregorian(year, month, 1));
+  const firstWeekday = new Date(`${first}T00:00:00Z`).getUTCDay();
+  return {
+    weekday: ["یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه", "شنبه"][weekday],
+    week: String(Math.floor((day - 1 + (firstWeekday + 1) % 7) / 7) + 1),
+  };
+}
 
 function jalaliStr(iso, latin = false) {
   const [y, m, d] = isoToJalali(iso);
