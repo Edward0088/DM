@@ -944,13 +944,14 @@ async function handleTxCallback(env, msg, action, args) {
   if (action === "desc-skip" && state.step === "description-input") {
     state.draft.desc = "";
     state.descriptionDone = true;
+    await cleanupMessages(env, chatId);
     if (!state.draft.accountCharge) {
       state.step = "amount-choice";
       await setState(env, chatId, state);
       return askTxAmount(env, chatId, state, msg);
     }
     await setState(env, chatId, state);
-    return continueTxFlow(env, chatId, state, msg);
+    return continueTxFlow(env, chatId, state);
   }
 
   if (action === "amount") {
