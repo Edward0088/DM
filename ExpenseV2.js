@@ -340,6 +340,9 @@ async function handleText(msg, env) {
     const isCommand = msg.text.trim().startsWith("/");
     const previousState = isCommand ? null : await getState(env, msg.chat.id);
     const result = await handleTextMessage(msg, env);
+    if (previousState?.flow === "tx" && previousState.step === "description-input") {
+      await cleanupMessages(env, msg.chat.id, result?.message_id).catch(() => {});
+    }
     if (previousState) {
       const currentState = await getState(env, msg.chat.id);
       if (JSON.stringify(previousState) === JSON.stringify(currentState))
