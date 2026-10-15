@@ -340,9 +340,6 @@ async function handleText(msg, env) {
     const isCommand = msg.text.trim().startsWith("/");
     const previousState = isCommand ? null : await getState(env, msg.chat.id);
     const result = await handleTextMessage(msg, env);
-    if (previousState?.flow === "tx" && previousState.step === "description-input") {
-      await cleanupMessages(env, msg.chat.id, result?.message_id).catch(() => {});
-    }
     if (previousState) {
       const currentState = await getState(env, msg.chat.id);
       if (JSON.stringify(previousState) === JSON.stringify(currentState))
@@ -388,7 +385,10 @@ async function handleTextMessage(msg, env) {
   }
 
   const state = await getState(env, chatId);
-  if (state && acceptsTextInput(state)) {
+  if (
+    state && acceptsTextInput(state) &&
+    !(state.flow === "tx" && state.step === "description-input")
+  ) {
     await cleanupMessages(env, chatId, msg.message_id).catch(() => {});
   } else if (!state) {
     await clearActiveMenus(env, chatId, null, { deleteMenus: !state }).catch(
@@ -413,13 +413,18 @@ async function handleTextMessage(msg, env) {
     state.draft.date = todayTehran();
     state.step = "description-input";
     await setState(env, chatId, state);
-    await send(env, chatId, "📝 توضیحات تراکنش رو بنویس؛ اگر توضیحی نداری، رد کردن رو بزن.", {
-      reply_markup: {
-        force_reply: true,
-        input_field_placeholder: "مثلاً خرید برای خانه",
+    const descriptionPrompt = await send(
+      env,
+      chatId,
+      "📝 توضیحات تراکنش رو بنویس؛ اگر توضیحی نداری، رد کردن رو بزن.",
+      {
+        reply_markup: {
+          force_reply: true,
+          input_field_placeholder: "مثلاً خرید برای خانه",
+        },
       },
-    });
-    return send(env, chatId, "یا توضیحات رو رد کن:", {
+    );
+    const descriptionMenu = await send(env, chatId, "یا توضیحات رو رد کن:", {
       reply_markup: {
         inline_keyboard: [
           [btn("⏭ رد کردن توضیحات", "tx:desc-skip")],
@@ -427,9 +432,19 @@ async function handleTextMessage(msg, env) {
         ],
       },
     });
+    state.descriptionPromptIds = [
+      descriptionPrompt.message_id,
+      descriptionMenu.message_id,
+    ];
+    await setState(env, chatId, state);
+    return descriptionMenu;
   }
 
   if (state.flow === "tx" && state.step === "description-input") {
+    await deleteMessagesById(env, chatId, state.descriptionPromptIds).catch(
+      () => {},
+    );
+    delete state.descriptionPromptIds;
     state.draft.desc = text.slice(0, 2000);
     state.descriptionDone = true;
     await setState(env, chatId, state);
@@ -945,9 +960,12 @@ async function handleTxCallback(env, msg, action, args) {
   }
 
   if (action === "desc-skip" && state.step === "description-input") {
+    await deleteMessagesById(env, chatId, state.descriptionPromptIds).catch(
+      () => {},
+    );
+    delete state.descriptionPromptIds;
     state.draft.desc = "";
     state.descriptionDone = true;
-    await cleanupMessages(env, chatId);
     if (!state.draft.accountCharge) {
       state.step = "amount-choice";
       await setState(env, chatId, state);
@@ -6308,6 +6326,44 @@ async function cleanupMessages(env, chatId, keepId = null) {
   await env.DB.prepare("DELETE FROM kv WHERE k=?")
     .bind(`ui:menus:${chatId}`)
     .run();
+}
+
+async function deleteMessagesById(env, chatId, messageIds = []) {
+  const ids = [
+    ...new Set(
+      (messageIds || [])
+        .filter((id) => id !== null && id !== undefined)
+        .map(Number)
+        .filter(Number.isFinite),
+    ),
+  ];
+  if (!ids.length) return;
+  await Promise.all(
+    ids.map((messageId) =>
+      tg(env, "deleteMessage", { chat_id: chatId, message_id: messageId }).catch(
+        () => {},
+      ),
+    ),
+  );
+  if (!env.DB) return;
+  await ensureStateDb(env);
+  for (const key of [`ui:${chatId}`, `ui:menus:${chatId}`]) {
+    const row = await env.DB.prepare("SELECT v FROM kv WHERE k=?")
+      .bind(key)
+      .first();
+    let tracked = [];
+    try {
+      tracked = JSON.parse(row?.v || "[]").map(Number).filter(Number.isFinite);
+    } catch {
+      tracked = [];
+    }
+    const remaining = tracked.filter((id) => !ids.includes(id));
+    await env.DB.prepare(
+      "INSERT INTO kv(k,v,exp) VALUES(?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v,exp=excluded.exp",
+    )
+      .bind(key, JSON.stringify(remaining), Date.now() + 7 * 24 * 60 * 60 * 1000)
+      .run();
+  }
 }
 
 /* ============================== Amount parsing (Toman → Rial) ============================== */
