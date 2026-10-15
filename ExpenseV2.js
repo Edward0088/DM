@@ -408,15 +408,33 @@ async function handleTextMessage(msg, env) {
     }
     state.draft.title = text;
     state.draft.date = todayTehran();
-    state.step = "amount-choice";
+    state.step = "description-input";
     await setState(env, chatId, state);
-    return askTxAmount(env, chatId, state);
+    await send(env, chatId, "📝 توضیحات تراکنش رو بنویس؛ اگر توضیحی نداری، رد کردن رو بزن.", {
+      reply_markup: {
+        force_reply: true,
+        input_field_placeholder: "مثلاً خرید برای خانه",
+      },
+    });
+    return send(env, chatId, "یا توضیحات رو رد کن:", {
+      reply_markup: {
+        inline_keyboard: [
+          [btn("⏭ رد کردن توضیحات", "tx:desc-skip")],
+          [btn("❌ لغو", "tx:cancel")],
+        ],
+      },
+    });
   }
 
   if (state.flow === "tx" && state.step === "description-input") {
     state.draft.desc = text.slice(0, 2000);
     state.descriptionDone = true;
     await setState(env, chatId, state);
+    if (!state.draft.accountCharge) {
+      state.step = "amount-choice";
+      await setState(env, chatId, state);
+      return askTxAmount(env, chatId, state);
+    }
     return continueTxFlow(env, chatId, state);
   }
 
@@ -926,6 +944,11 @@ async function handleTxCallback(env, msg, action, args) {
   if (action === "desc-skip" && state.step === "description-input") {
     state.draft.desc = "";
     state.descriptionDone = true;
+    if (!state.draft.accountCharge) {
+      state.step = "amount-choice";
+      await setState(env, chatId, state);
+      return askTxAmount(env, chatId, state, msg);
+    }
     await setState(env, chatId, state);
     return continueTxFlow(env, chatId, state, msg);
   }
