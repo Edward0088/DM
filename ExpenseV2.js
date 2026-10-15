@@ -419,41 +419,36 @@ async function handleTextMessage(msg, env) {
       "📝 توضیحات تراکنش رو بنویس؛ اگر توضیحی نداری، رد کردن رو بزن.",
       {
         reply_markup: {
-          force_reply: true,
-          input_field_placeholder: "مثلاً خرید برای خانه",
+          inline_keyboard: [
+            [btn("⏭ رد کردن توضیحات", "tx:desc-skip")],
+            [btn("❌ لغو", "tx:cancel")],
+          ],
         },
       },
     );
-    const descriptionMenu = await send(env, chatId, "یا توضیحات رو رد کن:", {
-      reply_markup: {
-        inline_keyboard: [
-          [btn("⏭ رد کردن توضیحات", "tx:desc-skip")],
-          [btn("❌ لغو", "tx:cancel")],
-        ],
-      },
-    });
-    state.descriptionPromptIds = [
-      descriptionPrompt.message_id,
-      descriptionMenu.message_id,
-    ];
+    state.descriptionPromptIds = [descriptionPrompt.message_id];
     await setState(env, chatId, state);
-    return descriptionMenu;
+    return descriptionPrompt;
   }
 
   if (state.flow === "tx" && state.step === "description-input") {
-    await deleteMessagesById(env, chatId, state.descriptionPromptIds).catch(
-      () => {},
-    );
+    const descriptionPromptIds = state.descriptionPromptIds;
     delete state.descriptionPromptIds;
     state.draft.desc = text.slice(0, 2000);
     state.descriptionDone = true;
     await setState(env, chatId, state);
+    let nextMessage;
     if (!state.draft.accountCharge) {
       state.step = "amount-choice";
       await setState(env, chatId, state);
-      return askTxAmount(env, chatId, state);
+      nextMessage = await askTxAmount(env, chatId, state);
+    } else {
+      nextMessage = await continueTxFlow(env, chatId, state);
     }
-    return continueTxFlow(env, chatId, state);
+    await deleteMessagesById(env, chatId, descriptionPromptIds).catch(
+      () => {},
+    );
+    return nextMessage;
   }
 
   if (state.flow === "tx" && state.step === "amount-input") {
@@ -960,19 +955,23 @@ async function handleTxCallback(env, msg, action, args) {
   }
 
   if (action === "desc-skip" && state.step === "description-input") {
-    await deleteMessagesById(env, chatId, state.descriptionPromptIds).catch(
-      () => {},
-    );
+    const descriptionPromptIds = state.descriptionPromptIds;
     delete state.descriptionPromptIds;
     state.draft.desc = "";
     state.descriptionDone = true;
+    let nextMessage;
     if (!state.draft.accountCharge) {
       state.step = "amount-choice";
       await setState(env, chatId, state);
-      return askTxAmount(env, chatId, state, msg);
+      nextMessage = await askTxAmount(env, chatId, state);
+    } else {
+      await setState(env, chatId, state);
+      nextMessage = await continueTxFlow(env, chatId, state);
     }
-    await setState(env, chatId, state);
-    return continueTxFlow(env, chatId, state);
+    await deleteMessagesById(env, chatId, descriptionPromptIds).catch(
+      () => {},
+    );
+    return nextMessage;
   }
 
   if (action === "amount") {
@@ -1236,12 +1235,23 @@ async function continueTxFlow(env, chatId, state, msg = null) {
   if (d.accountCharge && !state.descriptionDone) {
     state.step = "description-input";
     await setState(env, chatId, state);
-    return panel(env, chatId, msg, "📝 توضیحی برای این شارژ بنویس تا بعداً در سوابق تراکنش قابل‌تشخیص باشد. اگر توضیحی نداری، رد کردن را بزن.", {
-      inline_keyboard: [
-        [btn("⏭ رد کردن توضیحات", "tx:desc-skip")],
-        [btn("❌ لغو", "tx:cancel")],
-      ],
-    });
+    const descriptionPrompt = await panel(
+      env,
+      chatId,
+      msg,
+      "📝 توضیحی برای این شارژ بنویس تا بعداً در سوابق تراکنش قابل‌تشخیص باشد. اگر توضیحی نداری، رد کردن را بزن.",
+      {
+        inline_keyboard: [
+          [btn("⏭ رد کردن توضیحات", "tx:desc-skip")],
+          [btn("❌ لغو", "tx:cancel")],
+        ],
+      },
+    );
+    state.descriptionPromptIds = [
+      descriptionPrompt.message_id || msg?.message_id,
+    ];
+    await setState(env, chatId, state);
+    return descriptionPrompt;
   }
 
   if (meta.needsBox && !d.box) return choose(env, chatId, msg, "box");
