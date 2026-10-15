@@ -1118,13 +1118,26 @@ async function handleTxCallback(env, msg, action, args) {
   }
 
   if (action === "date") {
+    return transactionDateMenu(env, chatId, msg, state);
+  }
+
+  if (action === "backconfirm") return sendTxConfirm(env, chatId, state, msg);
+
+  if (action === "calmonth") {
+    return transactionCalendar(env, chatId, msg, Number(args[0]), Number(args[1]));
+  }
+
+  if (action === "calday") {
+    const date = parseDateInput(args[0]);
+    if (!date) return;
+    state.draft.date = date;
+    await setState(env, chatId, state);
     return sendTxConfirm(env, chatId, state, msg);
   }
 
   if (action === "save") {
     const d = state.draft;
     if (!(await ensureTransactionFunds(env, chatId, state, msg))) return;
-    d.date = todayTehran();
     await saveTransaction(env, d);
     await clearState(env, chatId);
     const boxReplacesAccount = Boolean(d.box && TYPE_META[d.type].optionalBox);
@@ -1468,6 +1481,91 @@ async function chooseCategoryChild(
   );
 }
 
+function transactionDateMenu(env, chatId, msg, state) {
+  const current = currentJMonth();
+  return editPanel(
+    env,
+    msg,
+    `📅 <b>تاریخ تراکنش</b>\nتاریخ فعلی: ${jalaliStr(state.draft.date)}\n\nامروز و دیروز انتخاب سریع‌اند؛ برای روز دیگری تقویم را باز کن.`,
+    {
+      inline_keyboard: [
+        [btn("📅 امروز", "tx:calday:" + todayTehran()), btn("⏮ دیروز", "tx:calday:" + addDays(todayTehran(), -1))],
+        [btn("🗓 انتخاب روز دلخواه", `tx:calmonth:${current.y}:${current.m}`)],
+        [btn("🔙 بازگشت به مرور", "tx:backconfirm")],
+      ],
+    },
+  );
+}
+
+function transactionCalendar(env, chatId, msg, year, month) {
+  return jalaliCalendar(env, msg, {
+    title: "تاریخ تراکنش",
+    year,
+    month,
+    monthCallback: (y, m) => `tx:calmonth:${y}:${m}`,
+    dayCallback: (iso) => `tx:calday:${iso}`,
+    quickCallback: (iso) => `tx:calday:${iso}`,
+    backCallback: "tx:date",
+  });
+}
+
+function reportCalendar(env, chatId, msg, year, month, role, warning = "", startDate = null) {
+  return jalaliCalendar(env, msg, {
+    title: role === "start" ? "از چه روزی؟" : "تا چه روزی؟",
+    subtitle: role === "end" && startDate ? `شروع بازه: ${jalaliStr(startDate)}` : "گام اول از بازه را انتخاب کن.",
+    warning,
+    year,
+    month,
+    monthCallback: (y, m) => `r:calmonth:${y}:${m}:${role}`,
+    dayCallback: (iso) => `r:calday:${role}:${iso}`,
+    quickCallback: (iso) => `r:calday:${role}:${iso}`,
+    backCallback: "r:g:custom",
+  });
+}
+
+function jalaliCalendar(env, msg, options) {
+  const { year, month } = options;
+  if (!(year >= 1200 && year <= 1600 && month >= 1 && month <= 12))
+    return editPanel(env, msg, "ماه انتخاب‌شده معتبر نیست.", backHome());
+  const range = jMonthRange(year, month);
+  const days = Math.round((Date.parse(range.end) - Date.parse(range.start)) / 86400000) + 1;
+  const firstDay = new Date(`${range.start}T00:00:00Z`).getUTCDay();
+  const offset = (firstDay + 1) % 7; // هفته از شنبه شروع می‌شود.
+  const cells = [
+    ...Array.from({ length: offset }, () => btn("·", "m:noop")),
+    ...Array.from({ length: days }, (_, i) => {
+      const date = addDays(range.start, i);
+      return btn(fa(i + 1), options.dayCallback(date));
+    }),
+  ];
+  while (cells.length % 7) cells.push(btn("·", "m:noop"));
+  const rows = [
+    [
+      btn("ش", "m:noop"), btn("ی", "m:noop"), btn("د", "m:noop"),
+      btn("س", "m:noop"), btn("چ", "m:noop"), btn("پ", "m:noop"),
+      btn("ج", "m:noop"),
+    ],
+  ];
+  for (let i = 0; i < cells.length; i += 7) rows.push(cells.slice(i, i + 7));
+  const previous = month === 1 ? [year - 1, 12] : [year, month - 1];
+  const next = month === 12 ? [year + 1, 1] : [year, month + 1];
+  rows.push([
+    btn("◀️", options.monthCallback(...previous)),
+    btn(`${MONTHS[month - 1]} ${fa(year)}`, "m:noop"),
+    btn("▶️", options.monthCallback(...next)),
+  ]);
+  const today = todayTehran();
+  rows.push([
+    btn("📅 امروز", options.quickCallback(today)),
+    btn("⏮ دیروز", options.quickCallback(addDays(today, -1))),
+  ]);
+  rows.push([btn("🔙 بازگشت", options.backCallback)]);
+  const text = [options.warning, `📆 <b>${esc(options.title)}</b>`, options.subtitle, "روز را انتخاب کن:"]
+    .filter(Boolean)
+    .join("\n");
+  return editPanel(env, msg, text, { inline_keyboard: rows });
+}
+
 async function sendTxConfirm(env, chatId, state, msg = null) {
   const d = state.draft;
   const boxReplacesAccount = Boolean(d.box && TYPE_META[d.type].optionalBox);
@@ -1497,6 +1595,7 @@ async function sendTxConfirm(env, chatId, state, msg = null) {
 
   const kb = {
     inline_keyboard: [
+      [btn("📅 تغییر تاریخ", "tx:date")],
       [btn("✅ ثبت", "tx:save")],
       [btn("❌ لغو", "tx:cancel")],
     ],
@@ -4154,14 +4253,11 @@ async function handleReportCallback(env, msg, action, args) {
     const cm = currentJMonth();
     if (k === "pick") return monthPicker(env, msg);
     if (k === "custom") {
-      st.step = "range";
+      st.step = "date-range";
+      st.datePickStep = "start";
       await setState(env, chatId, st);
-      return send(
-        env,
-        chatId,
-        "📅 روز، ماه یا بازه رو بفرست؛ مثلاً:\n<code>۱۴۰۵/۰۷</code> یا <code>۱۴۰۵/۰۷/۰۱ تا ۱۴۰۵/۰۷/۱۵</code>",
-        { reply_markup: { force_reply: true } },
-      );
+      const current = currentJMonth();
+      return reportCalendar(env, chatId, msg, current.y, current.m, "start");
     }
     if (k === "all") st.range = null;
     else if (k === "today") {
@@ -4174,6 +4270,45 @@ async function handleReportCallback(env, msg, action, args) {
     await setState(env, chatId, st);
     if (st.expenseCategory) return reportFormatMenu(env, chatId, msg, st);
     return afterRange(env, chatId, msg, st);
+  }
+
+  if (action === "calmonth") {
+    return reportCalendar(
+      env,
+      chatId,
+      msg,
+      Number(args[0]),
+      Number(args[1]),
+      args[2],
+      "",
+      st.rangeDraftStart || null,
+    );
+  }
+
+  if (action === "calday") {
+    const [role, date] = args;
+    const selectedDate = parseDateInput(date);
+    if (!selectedDate) return;
+    if (role === "start") {
+      st.rangeDraftStart = selectedDate;
+      st.datePickStep = "end";
+      await setState(env, chatId, st);
+      const [year, month] = isoToJalali(selectedDate);
+      return reportCalendar(env, chatId, msg, year, month, "end", "", selectedDate);
+    }
+    if (role === "end") {
+      if (selectedDate < st.rangeDraftStart) {
+        const [year, month] = isoToJalali(st.rangeDraftStart);
+        return reportCalendar(env, chatId, msg, year, month, "end", "تاریخ پایان باید هم‌روز یا بعد از تاریخ شروع باشد.", st.rangeDraftStart);
+      }
+      st.range = { start: st.rangeDraftStart, end: selectedDate };
+      delete st.rangeDraftStart;
+      st.step = null;
+      st.datePickStep = null;
+      await setState(env, chatId, st);
+      if (st.expenseCategory) return reportFormatMenu(env, chatId, msg, st);
+      return afterRange(env, chatId, msg, st);
+    }
   }
 
   if (action === "m") {
