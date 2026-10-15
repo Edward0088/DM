@@ -714,12 +714,7 @@ async function handleMenu(env, msg, action) {
     return editPanel(env, msg, mainMenuText(), mainMenuKeyboard());
   }
   if (action === "new") {
-    return editPanel(
-      env,
-      msg,
-      "➕ <b>ثبت تراکنش جدید</b>\nنوع را انتخاب کن: درآمد به حساب اصلی اضافه می‌شود، هزینه از مبدأ پرداخت کم می‌شود و انتقال، پول را از یک حساب به حساب دیگر جابه‌جا می‌کند.",
-      txTypeKeyboard(),
-    );
+    return handleTxCallback(env, msg, "type", ["هزینه"]);
   }
   if (action === "help") return editPanel(env, msg, helpText(), backHome());
   if (action === "report") return showOverview(env, msg);
@@ -762,7 +757,7 @@ function mainMenuKeyboard() {
 function transactionsKeyboard() {
   return {
     inline_keyboard: [
-      [btn("➕ ثبت تراکنش جدید", "m:new")],
+      [btn("➕ ثبت هزینه جدید", "m:new")],
       [btn("📋 مشاهده سوابق", "m:txhistory"), btn("📄 گزارش ردیفی", "r:t:t")],
       [btn("📊 هزینه‌ها به تفکیک دسته‌بندی", "r:ec")],
       [btn("🏠 منوی اصلی", "m:home")],
@@ -1313,7 +1308,10 @@ async function chooseCategoryRoot(
   optional = false,
   group = null,
 ) {
-  const all = await transactionCategories(env, await getState(env, chatId));
+  const state = await getState(env, chatId);
+  const all = await transactionCategories(env, state);
+  if (!group && state?.flow === "tx" && state.draft?.type === "هزینه")
+    group = "expense";
   if (!group) return chooseCategoryGroups(env, chatId, msg, optional);
   const explicitRoots = all.filter((x) => x.level === "کلی");
   const allRoots = explicitRoots.length
@@ -1343,7 +1341,8 @@ async function chooseCategoryRoot(
     rows.push(nav);
   }
   if (optional) rows.push([btn("⏭ ثبت بدون دسته‌بندی", "tx:skip:cat")]);
-  rows.push([btn("🔙 انتخاب گروه", `tx:catgroups:${optional ? "1" : "0"}`)]);
+  if (!(state?.flow === "tx" && state.draft?.type === "هزینه"))
+    rows.push([btn("🔙 انتخاب گروه", `tx:catgroups:${optional ? "1" : "0"}`)]);
   rows.push([btn("❌ لغو", "tx:cancel")]);
   const text = roots.length
     ? `🏷 <b>${categoryBrowseGroupLabel(group)}</b>\nدسته‌ی کلی یا یکی از زیردسته‌ها رو انتخاب کن:`
@@ -1431,7 +1430,9 @@ async function chooseCategoryChild(
   }
   if (optional) rows.push([btn("⏭ ثبت بدون دسته‌بندی", "tx:skip:cat")]);
   rows.push([btn("🔙 دسته‌های کلی", `tx:catpg:0:${optional ? "1" : "0"}:${group || "-"}`)]);
-  rows.push([btn("🔙 انتخاب گروه", `tx:catgroups:${optional ? "1" : "0"}`)]);
+  const state = await getState(env, chatId);
+  if (!(state?.flow === "tx" && state.draft?.type === "هزینه"))
+    rows.push([btn("🔙 انتخاب گروه", `tx:catgroups:${optional ? "1" : "0"}`)]);
   rows.push([btn("❌ لغو", "tx:cancel")]);
   return panel(
     env,
@@ -2046,13 +2047,7 @@ async function handleCrud(env, msg, action, args) {
 
   if (action === "n") {
     const e = args[0];
-    if (e === "t")
-      return editPanel(
-        env,
-        msg,
-        "➕ <b>ثبت تراکنش جدید</b>\nنوع را انتخاب کن: درآمد به حساب اصلی اضافه می‌شود، هزینه از مبدأ پرداخت کم می‌شود و انتقال، پول را از یک حساب به حساب دیگر جابه‌جا می‌کند.",
-        txTypeKeyboard(),
-      );
+    if (e === "t") return handleTxCallback(env, msg, "type", ["هزینه"]);
     if (e === "l") return startAllocation(env, msg);
     if (e === "c") return startNewCategory(env, chatId, msg, args[1], args[2]);
     if (e === "s") return startNewAsset(env, chatId, msg);
