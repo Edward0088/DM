@@ -4518,7 +4518,7 @@ function reportFormatMenu(env, chatId, msg, st) {
       env,
       chatId,
       msg,
-      `📎 <b>گزارش هزینه‌ها</b> · ${rangeLabel(st.range)}\nنمودار رو به‌صورت PDF بگیر:`,
+      `📎 <b>گزارش هزینه‌ها بر اساس دسته‌بندی</b> · ${rangeLabel(st.range)}\nجمع هزینه‌ی هر دسته‌ی مادر و ریز هزینه‌ی زیردسته‌ها را در نمودار و جدول PDF ببین:`,
       {
         inline_keyboard: [
           [btn("📄 دریافت گزارش PDF", "r:f:pdf")],
@@ -4900,18 +4900,39 @@ async function buildExpenseCategoryReport(env, range) {
   }
   const rows = [...totals.values()]
     .sort((a, b) => b.amount - a.amount || a.label.localeCompare(b.label, "fa"));
-  const lines = [csvLine(["دسته مادر", "زیردسته", "مسیر دسته‌بندی", "هزینه (تومان)", "سهم از کل (%)"])];
-  for (const row of rows)
-    lines.push(
-      csvLine([
-        row.parent,
-        row.child,
-        row.label,
-        tomanPlain(row.amount),
-        total ? ((row.amount / total) * 100).toFixed(1) : "0.0",
-      ]),
-    );
-  lines.push(csvLine(["جمع کل هزینه‌ها", "", "", tomanPlain(total), total ? "100.0" : "0.0"]));
+  const parentTotals = new Map();
+  for (const row of rows) {
+    const entry = parentTotals.get(row.parent) || { amount: 0, direct: 0 };
+    entry.amount += row.amount;
+    if (!row.child) entry.direct += row.amount;
+    parentTotals.set(row.parent, entry);
+  }
+  const parentRows = [...parentTotals.entries()]
+    .map(([name, amounts]) => ({ name, ...amounts }))
+    .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name, "fa"));
+  const lines = [csvLine(["نوع ردیف", "دسته مادر", "زیردسته", "مسیر دسته‌بندی", "هزینه (تومان)", "سهم از کل (%)"])];
+  for (const parent of parentRows) {
+    lines.push(csvLine([
+      "جمع دسته مادر",
+      parent.name,
+      "",
+      parent.name,
+      tomanPlain(parent.amount),
+      total ? ((parent.amount / total) * 100).toFixed(1) : "0.0",
+    ]));
+    const children = rows.filter((row) => row.parent === parent.name && row.child);
+    if (parent.direct > 0)
+      lines.push(csvLine([
+        "هزینه مستقیم مادر", parent.name, "—", parent.name,
+        tomanPlain(parent.direct), total ? ((parent.direct / total) * 100).toFixed(1) : "0.0",
+      ]));
+    for (const row of children)
+      lines.push(csvLine([
+        "زیردسته", row.parent, row.child, row.label,
+        tomanPlain(row.amount), total ? ((row.amount / total) * 100).toFixed(1) : "0.0",
+      ]));
+  }
+  lines.push(csvLine(["جمع کل", "", "", "", tomanPlain(total), total ? "100.0" : "0.0"]));
   return {
     filename: `monthly_expenses_by_category_${rangeTag(range)}.csv`,
     csv: "\uFEFF" + lines.join("\r\n"),
@@ -4921,6 +4942,13 @@ async function buildExpenseCategoryReport(env, range) {
       label: row.label,
       amount: tomanPlain(row.amount),
       percent: total ? (row.amount / total) * 100 : 0,
+    })),
+    parentChartData: parentRows.map((row) => ({
+      label: row.name,
+      amount: tomanPlain(row.amount),
+      percent: total ? (row.amount / total) * 100 : 0,
+      directAmount: tomanPlain(row.direct),
+      childCount: rows.filter((item) => item.parent === row.name && item.child).length,
     })),
   };
 }
@@ -5130,10 +5158,10 @@ function preparePdfReport(report, ent, mode) {
           header,
           ...rows.map((row) =>
             row.map((value, index) =>
-              /\(تومان\)\s*$/.test(header[index] || "")
+              header[index] === "هزینه (تومان)"
                 ? formatPdfToman(value)
-                : index === 4
-                  ? fa(value)
+                : header[index] === "سهم از کل (%)"
+                  ? `${fa(value)}٪`
                   : value,
             ),
           ),
@@ -5226,8 +5254,14 @@ function reportHtml(report, ent, label, fonts = null) {
   const body = report.transactionTimeline
     ? transactionTimelineRows(rows, head.length)
     : rows.map((r) => {
-        const totalRow = r[0] === "جمع کل هزینه‌ها";
-        return `<tr${totalRow ? ' class="total"' : ""}>${r.map((x) => `<td>${htmlEsc(x)}</td>`).join("")}</tr>`;
+        const rowClass = r[0] === "جمع کل"
+          ? "total"
+          : r[0] === "جمع دسته مادر"
+            ? "category-parent-total"
+            : r[0] === "هزینه مستقیم مادر"
+              ? "category-direct"
+              : "";
+        return `<tr${rowClass ? ` class="${rowClass}"` : ""}>${r.map((x) => `<td>${htmlEsc(x)}</td>`).join("")}</tr>`;
       }).join("");
   const timelineCols = report.transactionTimeline
     ? `<colgroup>${[10, 7, 7, 13, 8, 10, 10, 10, 10, 15]
@@ -5236,8 +5270,16 @@ function reportHtml(report, ent, label, fonts = null) {
   const barColors = [
     "#0ea5e9", "#6366f1", "#8b5cf6", "#ec4899", "#f97316", "#14b8a6",
   ];
+  const parentChart = report.parentChartData?.length
+    ? `<section class="chart parent-chart"><div class="chart-heading"><div><h2>جمع هزینه به تفکیک دسته مادر</h2><p>سهم هر گروه از کل هزینه‌های این بازه</p></div><span class="chart-total">${formatPdfToman(tomanPlain(report.parentChartData.reduce((sum, item) => sum + Number(item.amount || 0), 0)))} تومان</span></div><div class="chart-rows">${report.parentChartData
+        .map((item, index) => {
+          const width = Math.max(0, Math.min(100, Number(item.percent) || 0));
+          return `<div class="chart-row parent-row"><div class="chart-label">${htmlEsc(item.label)}<small>${fa(item.childCount)} زیردسته</small></div><div class="chart-track"><div class="chart-bar" style="width:${width}%;background:${barColors[index % barColors.length]}"></div></div><div class="chart-value">${formatPdfToman(item.amount)} <small>تومان · ${fa(Number(item.percent || 0).toFixed(1))}٪</small></div></div>`;
+        })
+        .join("")}</div></section>`
+    : "";
   const chart = report.chartData?.length
-    ? `<section class="chart"><h2>هزینه‌ی هر دسته‌بندی</h2><div class="chart-rows">${report.chartData
+    ? `<section class="chart detail-chart"><h2>ریز هزینه بر اساس دسته‌بندی</h2><div class="chart-rows">${report.chartData
         .map((item, index) => {
           const width = Math.max(0, Math.min(100, Number(item.percent) || 0));
           return `<div class="chart-row"><div class="chart-label">${htmlEsc(item.label)}</div><div class="chart-track"><div class="chart-bar" style="width:${width}%;background:${barColors[index % barColors.length]}"></div></div><div class="chart-value">${formatPdfToman(item.amount)} <small>تومان</small></div></div>`;
@@ -5251,12 +5293,12 @@ function reportHtml(report, ent, label, fonts = null) {
     ${fontFaces}
     @page{size:A4 landscape;margin:14mm}*{box-sizing:border-box}body{font-family:ShabnamFD,Tahoma,Arial,sans-serif;color:#172033;margin:0;direction:rtl;font-size:11px}
     .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;padding:0 0 12px;border-bottom:2px solid #dbe6f1}.title{font-size:22px;font-weight:700;color:#163b65}.meta{font-size:11px;color:#64748b;background:#f1f5f9;border-radius:8px;padding:6px 10px}
-    .chart{margin:0 0 18px;padding:14px 16px;border:1px solid #dbe6f1;border-radius:12px;background:linear-gradient(135deg,#f8fbff,#eef6ff)}.chart h2{margin:0 0 12px;font-size:15px;color:#163b65}.chart-rows{display:grid;gap:7px}.chart-row{display:grid;grid-template-columns:minmax(100px,1.2fr) minmax(120px,4fr) minmax(105px,1fr);align-items:center;gap:10px;min-height:20px;break-inside:avoid}.chart-label{font-weight:700;color:#334155;overflow-wrap:anywhere}.chart-track{height:12px;background:#e2e8f0;border-radius:999px;overflow:hidden;direction:rtl}.chart-bar{height:100%;border-radius:999px;print-color-adjust:exact;-webkit-print-color-adjust:exact}.chart-value{direction:rtl;text-align:left;font-weight:700;color:#0f172a;white-space:nowrap}.chart-value small{font-size:9px;color:#64748b}
-    table{width:100%;border-collapse:collapse;font-size:10px;direction:rtl}thead{display:table-header-group}th{background:#163b65;color:#fff;font-weight:700}th,td{border:1px solid #d9e2ec;padding:7px;text-align:right;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere}tr:nth-child(even) td{background:#f4f7fb}tr{break-inside:avoid}.total td{background:#eaf2fa!important;font-weight:700;color:#163b65}
+    .chart{margin:0 0 18px;padding:14px 16px;border:1px solid #dbe6f1;border-radius:12px;background:linear-gradient(135deg,#f8fbff,#eef6ff)}.chart h2{margin:0 0 12px;font-size:15px;color:#163b65}.chart-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.chart-heading h2{margin:0}.chart-heading p{margin:4px 0 0;color:#64748b;font-size:9px}.chart-total{padding:6px 10px;border-radius:8px;background:#dbeafe;color:#163b65;font-weight:700;white-space:nowrap}.chart-rows{display:grid;gap:7px}.chart-row{display:grid;grid-template-columns:minmax(100px,1.2fr) minmax(120px,4fr) minmax(105px,1fr);align-items:center;gap:10px;min-height:20px;break-inside:avoid}.chart-label{font-weight:700;color:#334155;overflow-wrap:anywhere}.chart-label small{display:block;margin-top:2px;color:#64748b;font-size:8px;font-weight:400}.chart-track{height:12px;background:#e2e8f0;border-radius:999px;overflow:hidden;direction:rtl}.chart-bar{height:100%;border-radius:999px;print-color-adjust:exact;-webkit-print-color-adjust:exact}.chart-value{direction:rtl;text-align:left;font-weight:700;color:#0f172a;white-space:nowrap}.chart-value small{font-size:9px;color:#64748b}.parent-chart{border-color:#bfdbfe;background:linear-gradient(135deg,#eff6ff,#f8fbff)}.parent-row{min-height:26px}.detail-chart{padding:10px 14px;background:#fff}.detail-chart .chart-row{grid-template-columns:minmax(130px,1.5fr) minmax(100px,4fr) minmax(105px,1.2fr)}
+    table{width:100%;border-collapse:collapse;font-size:10px;direction:rtl}thead{display:table-header-group}th{background:#163b65;color:#fff;font-weight:700}th,td{border:1px solid #d9e2ec;padding:7px;text-align:right;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere}tr:nth-child(even) td{background:#f4f7fb}tr{break-inside:avoid}.total td{background:#eaf2fa!important;font-weight:700;color:#163b65}.category-parent-total td{background:#e8f4ff!important;color:#123b63;font-weight:700;border-top:2px solid #7daedb}.category-direct td{color:#475569;font-style:italic}
     .timeline-note{margin:0 0 10px;color:#475569;font-size:10px}.transaction-timeline{table-layout:fixed;font-size:9px}.transaction-timeline th,.transaction-timeline td{padding:6px;line-height:1.5}.transaction-timeline .timeline-week td{background:#dceaf7!important;color:#163b65;font-weight:700;font-size:10px;break-after:avoid}.transaction-timeline .timeline-day-gap td{height:8px;padding:0;border:0;background:#fff!important;break-after:avoid}.transaction-timeline .timeline-week-total td{background:#e7f4ed!important;border-top:2px solid #64a88b;color:#145038;font-weight:700;padding:9px 10px}.transaction-timeline .timeline-week-total td:last-child{text-align:left}
     .foot{margin-top:12px;padding-top:8px;border-top:1px solid #d9e2ec;font-size:9px;color:#64748b;display:flex;justify-content:space-between}
   </style></head><body><div class="head"><div class="title">${htmlEsc(report.title || `${ent.icon} گزارش ${ent.fa}`)}</div><div class="meta">بازه: ${htmlEsc(label)}</div></div>
-  ${chart}${report.transactionTimeline ? '<p class="timeline-note">هفته‌ها از شنبه شروع می‌شوند؛ هفتهٔ ۱ شامل روز اول ماه است.</p>' : ""}<table${report.transactionTimeline ? ' class="transaction-timeline"' : ""}>${timelineCols}<thead><tr>${th}</tr></thead><tbody>${body}</tbody></table><div class="foot"><span>${htmlEsc(fa(report.count))} ردیف · مبالغ به تومان</span><span>قلم Shabnam FD · Saber Rastikerdar · SIL OFL 1.1</span></div></body></html>`;
+  ${parentChart}${chart}${report.transactionTimeline ? '<p class="timeline-note">هفته‌ها از شنبه شروع می‌شوند؛ هفتهٔ ۱ شامل روز اول ماه است.</p>' : ""}<table${report.transactionTimeline ? ' class="transaction-timeline"' : ""}>${timelineCols}<thead><tr>${th}</tr></thead><tbody>${body}</tbody></table><div class="foot"><span>${htmlEsc(fa(report.count))} ردیف · مبالغ به تومان</span><span>قلم Shabnam FD · Saber Rastikerdar · SIL OFL 1.1</span></div></body></html>`;
 }
 
 function transactionTimelineRows(rows, columnCount) {
