@@ -2714,6 +2714,9 @@ async function showItem(env, chatId, msg, e, id, note = "", txType = null) {
         relIds.push(r.id);
   }
   const rel = await relNames(env, relIds);
+  const assetPurchase = e === "s"
+    ? assetPurchaseTotals((await assetPurchaseMap(env, [page])).get(compactId(page.id)))
+    : null;
   const lines = [];
   if (note) lines.push(esc(note), "");
   const itemIcon = e === "c"
@@ -2735,6 +2738,7 @@ async function showItem(env, chatId, msg, e, id, note = "", txType = null) {
     TX.toBox,
     TX.desc,
   ]);
+  let assetPurchasePriceShown = false;
   for (const p of schema.props) {
     if (
       p.type === "title" ||
@@ -2745,7 +2749,12 @@ async function showItem(env, chatId, msg, e, id, note = "", txType = null) {
       continue;
     const money = isMoneyField(e, p.name);
     let text;
-    if (e === "a" && p.name === ACC.balance) {
+    if (e === "s" && [AST.price, ASSET_PURCHASE_PRICE].includes(p.name)) {
+      assetPurchasePriceShown = true;
+      text = assetPurchase.price > 0
+        ? fmt(assetPurchase.price)
+        : cellText(page, p, { money, rel });
+    } else if (e === "a" && p.name === ACC.balance) {
       text = fmt(await accountBalanceFromPage(env, page));
     } else if (e === "b" && p.name === BOX.balance) {
       text = fmt(await boxBalanceFromPage(env, page));
@@ -2756,6 +2765,13 @@ async function showItem(env, chatId, msg, e, id, note = "", txType = null) {
     }
     if (text === "") continue;
     lines.push(`${esc(categoryFieldLabel(e, p))}: <b>${esc(text)}</b>${money ? " تومان" : ""}`);
+  }
+
+  if (e === "s") {
+    if (!assetPurchasePriceShown && assetPurchase.price > 0)
+      lines.push(`قیمت زمان خرید: <b>${fmt(assetPurchase.price)} تومان</b>`);
+    if (assetPurchase.amount > 0)
+      lines.push(`مبلغ نهایی خرید: <b>${fmt(assetPurchase.amount)} تومان</b>`);
   }
 
   if (e === "g") {
