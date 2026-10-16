@@ -697,7 +697,6 @@ async function handleMenu(env, msg, action) {
   await clearState(env, chatId);
 
   const listMap = {
-    txhistory: "t",
     accounts: "a",
     boxes: "b",
     assets: "s",
@@ -705,6 +704,7 @@ async function handleMenu(env, msg, action) {
     categories: "c",
   };
   if (listMap[action]) return listEntity(env, chatId, msg, listMap[action], 0);
+  if (action === "txhistory") return transactionHistoryDateMenu(env, chatId, msg);
   if (action === "assetpricesrefresh")
     marketPriceCache = { expiresAt: 0, text: null };
   if (action === "assetprices" || action === "assetpricesrefresh")
@@ -2109,6 +2109,9 @@ async function saveAllocation(env, d) {
 async function handleCrud(env, msg, action, args) {
   const chatId = msg.chat.id;
 
+  if (action === "th")
+    return handleTransactionHistoryCallback(env, chatId, msg, args);
+
   if (["l", "v", "e", "f", "d", "D", "n"].includes(action) && args[0] === "g") {
     await clearState(env, chatId);
     return editPanel(
@@ -2161,16 +2164,26 @@ async function handleCrud(env, msg, action, args) {
     );
   }
   if (action === "tg")
-    return listEntity(env, chatId, msg, "t", 0, transactionTypeFromCode(args[0]));
+    return listEntity(
+      env,
+      chatId,
+      msg,
+      "t",
+      0,
+      transactionTypeFromCode(args[0]),
+      args[1] && args[1] !== "-" ? args[1] : null,
+    );
   if (action === "l")
     return listEntity(
       env, chatId, msg, args[0], Number(args[1]) || 0,
       args[0] === "t" ? transactionTypeFromCode(args[2]) : null,
+      args[0] === "t" && args[3] !== "-" ? args[3] || null : null,
     );
   if (action === "v")
     return showItem(
       env, chatId, msg, args[0], args[1], "",
       args[0] === "t" ? transactionTypeFromCode(args[2]) : null,
+      args[0] === "t" && args[3] !== "-" ? args[3] || null : null,
     );
 
   if (action === "charge") {
@@ -2450,14 +2463,91 @@ async function handleCrud(env, msg, action, args) {
   }
 }
 
-async function listEntity(env, chatId, msg, e, page = 0, txType = null) {
+function transactionHistoryDateMenu(env, chatId, msg) {
+  return editPanel(env, msg,
+    "📅 <b>سوابق تراکنش‌ها</b>\nاول بازه را مشخص کن؛ می‌توانی یک روز را ببینی یا همه‌ی تاریخ‌ها را مرور کنی.",
+    { inline_keyboard: [
+      [btn("📅 امروز", "x:th:today"), btn("⏮ دیروز", "x:th:yesterday")],
+      [btn("🗓 انتخاب یک تاریخ", "x:th:date")],
+      [btn("📚 همه‌ی تاریخ‌ها", "x:th:all")],
+      [btn("🔙 منوی تراکنش‌ها", "m:transactions")],
+    ] },
+  );
+}
+
+function transactionHistoryTypeMenu(env, chatId, msg, date) {
+  const dateToken = date || "-";
+  return editPanel(env, msg,
+    `📅 <b>سوابق ${date ? jalaliStr(date) : "همه‌ی تاریخ‌ها"}</b>\nنوع تراکنش را انتخاب کن تا فهرست دقیق‌تر شود:`,
+    { inline_keyboard: [
+      [btn("✅ همه‌ی نوع‌ها", `x:th:show:0:${dateToken}`)],
+      ...chunk(TX_TYPES.map((type, index) =>
+        btn(`${TYPE_META[type].icon} ${type}`, `x:th:show:${index + 1}:${dateToken}`),
+      ), 2),
+      [btn("📅 تغییر تاریخ", "m:txhistory"), btn("🔙 منوی تراکنش‌ها", "m:transactions")],
+    ] },
+  );
+}
+
+function transactionHistoryCalendar(env, msg, year, month) {
+  return jalaliCalendar(env, msg, {
+    title: "فیلتر تاریخ سوابق",
+    subtitle: "روز موردنظر را انتخاب کن؛ امروز و دیروز هم انتخاب سریع دارند.",
+    year,
+    month,
+    monthCallback: (y, m) => `x:th:month:${y}:${m}`,
+    dayCallback: (iso) => `x:th:day:${iso}`,
+    quickCallback: (iso) => `x:th:day:${iso}`,
+    backCallback: "m:txhistory",
+  });
+}
+
+async function handleTransactionHistoryCallback(env, chatId, msg, args) {
+  const [step, value, dateToken] = args;
+  if (step === "date") {
+    const current = currentJMonth();
+    return transactionHistoryCalendar(env, msg, current.y, current.m);
+  }
+  if (step === "month")
+    return transactionHistoryCalendar(env, msg, Number(value), Number(dateToken));
+  if (["today", "yesterday", "all"].includes(step)) {
+    const date = step === "today"
+      ? todayTehran()
+      : step === "yesterday"
+        ? addDays(todayTehran(), -1)
+        : null;
+    return transactionHistoryTypeMenu(env, chatId, msg, date);
+  }
+  if (step === "day") {
+    const date = parseDateInput(value);
+    if (!date)
+      return editPanel(env, msg, "این تاریخ معتبر نیست؛ از تقویم یک روز را انتخاب کن.", {
+        inline_keyboard: [[btn("🗓 باز کردن تقویم", "x:th:date")], [btn("🔙 بازگشت", "m:txhistory")]],
+      });
+    return transactionHistoryTypeMenu(env, chatId, msg, date);
+  }
+  if (step === "show") {
+    const txType = transactionTypeFromCode(value);
+    const date = dateToken && dateToken !== "-" ? parseDateInput(dateToken) : null;
+    if (dateToken && dateToken !== "-" && !date)
+      return transactionHistoryDateMenu(env, chatId, msg);
+    return listEntity(env, chatId, msg, "t", 0, txType, date);
+  }
+}
+
+async function listEntity(env, chatId, msg, e, page = 0, txType = null, txDate = null) {
   if (e === "c") return listCategoryRoots(env, chatId, msg, page);
   const ent = ENT[e];
+  const filters = [];
+  if (e === "t" && txType)
+    filters.push({ property: TX.type, select: { equals: txType } });
+  if (e === "t" && txDate) {
+    filters.push({ property: TX.date, date: { on_or_after: txDate } });
+    filters.push({ property: TX.date, date: { on_or_before: txDate } });
+  }
   const rows = ent.date
     ? await queryDb(env, ent.key, {
-        filter: e === "t" && txType
-          ? { property: TX.type, select: { equals: txType } }
-          : undefined,
+        filter: filters.length > 1 ? { and: filters } : filters[0],
         sorts: e === "l"
           ? [{ timestamp: "created_time", direction: "descending" }]
           : [
@@ -2486,7 +2576,7 @@ async function listEntity(env, chatId, msg, e, page = 0, txType = null) {
             `${brief.icon} ${name}${brief.text ? " · " + brief.text : ""}`,
             58,
           ),
-          `x:v:${e}:${compactId(p.id)}${e === "t" ? ":" + transactionTypeCode(txType) : ""}`,
+          `x:v:${e}:${compactId(p.id)}${e === "t" ? `:${transactionTypeCode(txType)}:${txDate || "-"}` : ""}`,
         ),
       ];
     }),
@@ -2494,20 +2584,21 @@ async function listEntity(env, chatId, msg, e, page = 0, txType = null) {
 
   const nav = [];
   const listCallback = (targetPage) =>
-    `x:l:${e}:${targetPage}${e === "t" ? ":" + transactionTypeCode(txType) : ""}`;
+    `x:l:${e}:${targetPage}${e === "t" ? `:${transactionTypeCode(txType)}:${txDate || "-"}` : ""}`;
   if (page > 0) nav.push(btn("◀️ قبلی", listCallback(page - 1)));
   if (hasNext) nav.push(btn("بعدی ▶️", listCallback(page + 1)));
 
   const kb = e === "t"
     ? [
-        [btn(`${txType ? "" : "✅ "}همه`, "x:tg:0")],
+        [btn(`${txType ? "" : "✅ "}همه`, `x:tg:0:${txDate || "-"}`)],
         ...chunk(TX_TYPES.map((type, index) =>
-          btn(`${txType === type ? "✅ " : ""}${TYPE_META[type].icon} ${type}`, `x:tg:${index + 1}`),
+          btn(`${txType === type ? "✅ " : ""}${TYPE_META[type].icon} ${type}`, `x:tg:${index + 1}:${txDate || "-"}`),
         ), 2),
         ...buttons,
       ]
     : [...buttons];
   if (nav.length) kb.push(nav);
+  if (e === "t") kb.push([btn("📅 تغییر فیلتر تاریخ", "m:txhistory")]);
   const addLabel = e === "s" ? "➕ افزودن دارایی" : `➕ ${ent.one} جدید`;
   kb.push([
     btn(e === "t" ? "➕ ثبت تراکنش" : addLabel, `x:n:${e}`),
@@ -2517,7 +2608,7 @@ async function listEntity(env, chatId, msg, e, page = 0, txType = null) {
 
   const text =
     `${ent.icon} <b>${esc(ent.fa)}</b> — صفحه ${fa(page + 1)}\n` +
-    (e === "t" ? `نوع: <b>${esc(txType || "همه")}</b>\n` : "") +
+    (e === "t" ? `تاریخ: <b>${txDate ? jalaliStr(txDate) : "همه‌ی تاریخ‌ها"}</b> · نوع: <b>${esc(txType || "همه")}</b>\n` : "") +
     (slice.length
       ? "برای مشاهده، ویرایش یا حذف روی یک مورد بزن 👇"
       : "موردی ثبت نشده.");
@@ -2694,7 +2785,7 @@ async function briefOf(env, e, p) {
   return { icon: "🏷", text: "" };
 }
 
-async function showItem(env, chatId, msg, e, id, note = "", txType = null) {
+async function showItem(env, chatId, msg, e, id, note = "", txType = null, txDate = null) {
   const ent = ENT[e];
   const [schema, page] = await Promise.all([
     getSchema(env, ent.key),
@@ -2703,7 +2794,7 @@ async function showItem(env, chatId, msg, e, id, note = "", txType = null) {
 
   if (page.archived) {
     return panel(env, chatId, msg, "این رکورد قبلاً حذف شده.", {
-      inline_keyboard: [[btn("📋 فهرست", `x:l:${e}:0`)]],
+      inline_keyboard: [[btn("📋 فهرست", `x:l:${e}:0${e === "t" ? `:${transactionTypeCode(txType)}:${txDate || "-"}` : ""}`)]],
     });
   }
 
@@ -2789,7 +2880,7 @@ async function showItem(env, chatId, msg, e, id, note = "", txType = null) {
   const backToList =
     e === "c" && categoryParentId
       ? `x:cs:${compactId(categoryParentId)}:0`
-      : `x:l:${e}:0${e === "t" ? ":" + transactionTypeCode(txType) : ""}`;
+      : `x:l:${e}:0${e === "t" ? `:${transactionTypeCode(txType)}:${txDate || "-"}` : ""}`;
   const kb = {
     inline_keyboard: [
       ...(e === "a" ? [[btn("💰 شارژ حساب", `x:charge:a:${cid}`)]] : []),
