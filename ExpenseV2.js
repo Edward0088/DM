@@ -4147,10 +4147,11 @@ async function showOverview(env, msg) {
   const a = stat(thisMonth),
     b = stat(lastMonth);
 
+  const categoryPaths = categoryPathMap(categories);
   const categoryNames = new Map(
     categories.map((category) => [
       compactId(category.id),
-      `${category.icon} ${category.name}`,
+      `${category.icon} ${categoryPaths.get(compactId(category.id))?.label || category.name}`,
     ]),
   );
   const expensesByCategory = new Map();
@@ -4733,6 +4734,9 @@ async function buildDetail(env, e, range, txType = null) {
   const schema = await getSchema(env, ent.key);
   const pages = await fetchRows(env, e, range, txType);
   const rel = await relationMap(env, schema, pages);
+  const categoryPaths = e === "t"
+    ? categoryPathMap(await listCategories(env, true))
+    : null;
   const assetPurchases = e === "s" ? await assetPurchaseMap(env, pages) : null;
 
   let cols = [
@@ -4814,6 +4818,12 @@ async function buildDetail(env, e, range, txType = null) {
       : null;
     const cells = cols.map((p) => {
       const money = isMoneyField(e, p.name);
+      if (e === "t" && p.name === TX.category) {
+        const ids = pg.properties?.[TX.category]?.relation || [];
+        return ids.length
+          ? ids.map((item) => categoryPaths.get(compactId(item.id))?.label || rel.get(compactId(item.id)) || "دسته‌ی حذف‌شده").join("، ")
+          : "بدون دسته‌بندی";
+      }
       if (e === "s" && p.name === ASSET_PURCHASE_PRICE && purchase.price > 0)
         return tomanPlain(purchase.price);
       const key = pg.id + "|" + p.name;
@@ -4858,6 +4868,8 @@ async function buildExpenseCategoryReport(env, range) {
     limit: MAX_EXPORT_ROWS,
   });
   const rel = await relationMap(env, schema, pages);
+  const categories = await listCategories(env, true);
+  const categoryPaths = categoryPathMap(categories);
   const totals = new Map();
   let total = 0;
   for (const page of pages) {
@@ -4870,36 +4882,43 @@ async function buildExpenseCategoryReport(env, range) {
         ),
       ),
     ];
-    const categories = ids.length
-      ? ids.map((id) => rel.get(id) || "بدون دسته‌بندی")
-      : ["بدون دسته‌بندی"];
-    const baseShare = Math.floor(amount / categories.length);
-    let remainder = amount - baseShare * categories.length;
-    for (const name of categories) {
+    const assignedCategories = ids.length
+      ? ids.map((id) => ({
+          id,
+          ...(categoryPaths.get(id) || { label: rel.get(id) || "دسته‌ی حذف‌شده", parent: "دسته‌ی حذف‌شده", child: "" }),
+        }))
+      : [{ id: "none", label: "بدون دسته‌بندی", parent: "بدون دسته‌بندی", child: "" }];
+    const baseShare = Math.floor(amount / assignedCategories.length);
+    let remainder = amount - baseShare * assignedCategories.length;
+    for (const category of assignedCategories) {
       const share = baseShare + (remainder-- > 0 ? 1 : 0);
-      totals.set(name, (totals.get(name) || 0) + share);
+      totals.set(category.id, {
+        ...category,
+        amount: (totals.get(category.id)?.amount || 0) + share,
+      });
     }
   }
-  const rows = [...totals.entries()]
-    .map(([name, amount]) => ({ name, amount }))
-    .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name, "fa"));
-  const lines = [csvLine(["دسته‌بندی", "هزینه (تومان)", "سهم از کل (%)"])];
+  const rows = [...totals.values()]
+    .sort((a, b) => b.amount - a.amount || a.label.localeCompare(b.label, "fa"));
+  const lines = [csvLine(["دسته مادر", "زیردسته", "مسیر دسته‌بندی", "هزینه (تومان)", "سهم از کل (%)"])];
   for (const row of rows)
     lines.push(
       csvLine([
-        row.name,
+        row.parent,
+        row.child,
+        row.label,
         tomanPlain(row.amount),
         total ? ((row.amount / total) * 100).toFixed(1) : "0.0",
       ]),
     );
-  lines.push(csvLine(["جمع کل هزینه‌ها", tomanPlain(total), total ? "100.0" : "0.0"]));
+  lines.push(csvLine(["جمع کل هزینه‌ها", "", "", tomanPlain(total), total ? "100.0" : "0.0"]));
   return {
     filename: `monthly_expenses_by_category_${rangeTag(range)}.csv`,
     csv: "\uFEFF" + lines.join("\r\n"),
     count: rows.length,
     title: `گزارش هزینه‌ها بر اساس دسته‌بندی — ${rangeLabel(range)}`,
     chartData: rows.map((row) => ({
-      label: row.name,
+      label: row.label,
       amount: tomanPlain(row.amount),
       percent: total ? (row.amount / total) * 100 : 0,
     })),
@@ -4913,6 +4932,9 @@ async function buildSummary(env, e, range, mode, txType = null) {
   const schema = await getSchema(env, ent.key);
   const pages = await fetchRows(env, e, range, txType);
   const rel = await relationMap(env, schema, pages);
+  const categoryPaths = e === "t" && g.rel === TX.category
+    ? categoryPathMap(await listCategories(env, true))
+    : null;
   const amountName = e === "t" ? TX.amount : ALC.amount;
 
   const groups = new Map();
@@ -4934,7 +4956,7 @@ async function buildSummary(env, e, range, mode, txType = null) {
     } else {
       const ids = (p.properties?.[g.rel]?.relation || []).map((r) => r.id);
       label = ids.length
-        ? ids.map((id) => rel.get(compactId(id)) || "؟").join("، ")
+        ? ids.map((id) => categoryPaths?.get(compactId(id))?.label || rel.get(compactId(id)) || "؟").join("، ")
         : "بدون مقدار";
       sort = label;
     }
@@ -5110,7 +5132,7 @@ function preparePdfReport(report, ent, mode) {
             row.map((value, index) =>
               /\(تومان\)\s*$/.test(header[index] || "")
                 ? formatPdfToman(value)
-                : index === 2
+                : index === 4
                   ? fa(value)
                   : value,
             ),
@@ -5885,6 +5907,33 @@ async function listCategories(env, includeInactive = false) {
       };
     })
     .filter((x) => x.name);
+}
+
+function categoryPathMap(categories) {
+  const byId = new Map(categories.map((category) => [compactId(category.id), category]));
+  const paths = new Map();
+  const pathFor = (category, visited = new Set()) => {
+    const id = compactId(category.id);
+    if (paths.has(id)) return paths.get(id);
+    if (visited.has(id)) return { label: category.name, parent: category.name, child: "" };
+    const nextVisited = new Set(visited);
+    nextVisited.add(id);
+    const parent = category.parentIds
+      .map((parentId) => byId.get(compactId(parentId)))
+      .find(Boolean);
+    const parentPath = parent ? pathFor(parent, nextVisited) : null;
+    const path = parentPath
+      ? {
+          label: `${parentPath.label} / ${category.name}`,
+          parent: parentPath.parent,
+          child: category.name,
+        }
+      : { label: category.name, parent: category.name, child: "" };
+    paths.set(id, path);
+    return path;
+  };
+  for (const category of categories) pathFor(category);
+  return paths;
 }
 
 const nameCollator = new Intl.Collator("fa", {
