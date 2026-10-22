@@ -791,6 +791,7 @@ function transactionsKeyboard() {
       [btn("➕ ثبت هزینه جدید", "m:new")],
       [btn("📋 مشاهده سوابق", "m:txhistory"), btn("📄 گزارش ردیفی", "r:t:t")],
       [btn("📊 هزینه‌ها به تفکیک دسته‌بندی", "r:ec")],
+      [btn("📑 ریزهزینه‌ها به تفکیک دسته‌بندی", "r:ed")],
       [btn("🏠 منوی اصلی", "m:home")],
     ],
   };
@@ -4330,6 +4331,7 @@ function reportTableMenu(env, chatId, msg) {
     [btn("— 🧾 فعالیت‌های مالی —", "m:noop")],
     [btn("💳 تراکنش‌ها", "r:t:t"), btn("🎯 تخصیص‌ها", "r:t:l")],
     [btn("📊 هزینه‌های ماهانه بر اساس دسته‌بندی", "r:ec")],
+    [btn("📑 ریزهزینه‌ها به تفکیک دسته‌بندی", "r:ed")],
     [btn("— 🏦 حساب‌ها و دارایی‌ها —", "m:noop")],
     [btn("🏦 حساب‌ها", "r:t:a"), btn("📦 باکس‌ها", "r:t:b")],
     [btn("💎 دارایی‌ها", "r:t:s"), btn("🏷 دسته‌بندی‌ها", "r:t:c")],
@@ -4351,6 +4353,12 @@ async function handleReportCallback(env, msg, action, args) {
     const st = { flow: "report", ent: "t", expenseCategory: true, range: null };
     await setState(env, chatId, st);
     return expenseCategoryMonthMenu(env, msg);
+  }
+
+  if (action === "ed") {
+    const st = { flow: "report", ent: "t", expenseDetail: true, range: null };
+    await setState(env, chatId, st);
+    return expenseDetailMonthMenu(env, msg);
   }
 
   if (action === "t") {
@@ -4409,6 +4417,7 @@ async function handleReportCallback(env, msg, action, args) {
         cm.m === 1 ? jMonthRange(cm.y - 1, 12) : jMonthRange(cm.y, cm.m - 1);
     await setState(env, chatId, st);
     if (st.expenseCategory) return reportFormatMenu(env, chatId, msg, st);
+    if (st.expenseDetail) return expenseDetailRootMenu(env, chatId, msg, st);
     return afterRange(env, chatId, msg, st);
   }
 
@@ -4447,6 +4456,7 @@ async function handleReportCallback(env, msg, action, args) {
       st.datePickStep = null;
       await setState(env, chatId, st);
       if (st.expenseCategory) return reportFormatMenu(env, chatId, msg, st);
+      if (st.expenseDetail) return expenseDetailRootMenu(env, chatId, msg, st);
       return afterRange(env, chatId, msg, st);
     }
   }
@@ -4455,7 +4465,28 @@ async function handleReportCallback(env, msg, action, args) {
     st.range = jMonthRange(Number(args[0]), Number(args[1]));
     await setState(env, chatId, st);
     if (st.expenseCategory) return reportFormatMenu(env, chatId, msg, st);
+    if (st.expenseDetail) return expenseDetailRootMenu(env, chatId, msg, st);
     return afterRange(env, chatId, msg, st);
+  }
+
+  if (st.expenseDetail) {
+    if (action === "edp")
+      return expenseDetailRootMenu(env, chatId, msg, st, Number(args[0]));
+    if (action === "edr") {
+      st.rootId = args[0];
+      delete st.categoryId;
+      await setState(env, chatId, st);
+      return expenseDetailCategoryMenu(env, chatId, msg, st);
+    }
+    if (action === "eds")
+      return expenseDetailCategoryMenu(env, chatId, msg, st, Number(args[0]));
+    if (action === "eda" || action === "edc") {
+      st.categoryId = action === "eda" ? st.rootId : args[0];
+      await setState(env, chatId, st);
+      return expenseDetailFormatMenu(env, chatId, msg, st);
+    }
+    if (action === "edf" && ["pdf", "csv"].includes(args[0]))
+      return runReport(env, chatId, msg, st, "detail", args[0]);
   }
 
   if (action === "tt" && st.ent === "t" && !st.expenseCategory) {
@@ -4539,6 +4570,106 @@ function expenseCategoryMonthMenu(env, msg) {
       ],
     },
   );
+}
+
+function expenseDetailMonthMenu(env, msg) {
+  return editPanel(env, msg,
+    "📅 <b>ریزهزینه‌ها به تفکیک دسته‌بندی</b>\nماه موردنظر را انتخاب کن:",
+    {
+      inline_keyboard: [
+        [btn("🗓 این ماه", "r:g:thism"), btn("🗓 ماه قبل", "r:g:lastm")],
+        [btn("📆 انتخاب ماه", "r:g:pick")],
+        [btn("🔙 تراکنش‌ها", "m:transactions"), btn("📤 گزارش‌ساز", "m:csv")],
+      ],
+    });
+}
+
+function expenseDetailRoots(categories) {
+  const explicitRoots = categories.filter((category) => category.level === "کلی");
+  const roots = explicitRoots.length
+    ? explicitRoots
+    : categories.filter((category) => !category.parentIds.length);
+  return roots.filter((root) =>
+    categoryRootBelongsToGroup(root, categories, "expense"));
+}
+
+function categoryDescendantIds(categories, id) {
+  const ids = new Set([compactId(id)]);
+  let changed;
+  do {
+    changed = false;
+    for (const category of categories) {
+      const key = compactId(category.id);
+      if (ids.has(key) || !category.parentIds.some((parentId) => ids.has(compactId(parentId))))
+        continue;
+      ids.add(key);
+      changed = true;
+    }
+  } while (changed);
+  return ids;
+}
+
+async function expenseDetailRootMenu(env, chatId, msg, st, page = 0) {
+  const categories = await listCategories(env, true);
+  const roots = expenseDetailRoots(categories);
+  const pages = Math.max(1, Math.ceil(roots.length / PAGE_SIZE));
+  page = Number.isFinite(page) ? Math.min(Math.max(0, page), pages - 1) : 0;
+  const rows = roots.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+    .map((root) => [btn(`${root.icon} ${root.name}`, `r:edr:${compactId(root.id)}`)]);
+  if (pages > 1) {
+    const nav = [];
+    if (page > 0) nav.push(btn("◀️ قبلی", `r:edp:${page - 1}`));
+    nav.push(btn(`${fa(page + 1)}/${fa(pages)}`, "m:noop"));
+    if (page < pages - 1) nav.push(btn("بعدی ▶️", `r:edp:${page + 1}`));
+    rows.push(nav);
+  }
+  rows.push([btn("🔙 انتخاب ماه", "r:ed"), btn("🏠 منو", "m:home")]);
+  return panel(env, chatId, msg,
+    `🏷 <b>ریزهزینه‌ها</b> · ${rangeLabel(st.range)}\n${roots.length ? "دستهٔ کلی هزینه را انتخاب کن:" : "دستهٔ کلی هزینه‌ای پیدا نشد."}`,
+    { inline_keyboard: rows });
+}
+
+async function expenseDetailCategoryMenu(env, chatId, msg, st, page = 0) {
+  const categories = await listCategories(env, true);
+  const root = expenseDetailRoots(categories).find((item) => idEq(item.id, st.rootId));
+  if (!root) return expenseDetailRootMenu(env, chatId, msg, st);
+  const descendants = categoryDescendantIds(categories, root.id);
+  const children = categories.filter((item) =>
+    !idEq(item.id, root.id) && descendants.has(compactId(item.id)));
+  const pages = Math.max(1, Math.ceil(children.length / PAGE_SIZE));
+  page = Number.isFinite(page) ? Math.min(Math.max(0, page), pages - 1) : 0;
+  const rows = [[btn(`📂 کل دستهٔ ${root.name} (با زیردسته‌ها)`, "r:eda")]];
+  rows.push(...children.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+    .map((child) => [btn(`${child.icon} ${child.name}`, `r:edc:${compactId(child.id)}`)]));
+  if (pages > 1) {
+    const nav = [];
+    if (page > 0) nav.push(btn("◀️ قبلی", `r:eds:${page - 1}`));
+    nav.push(btn(`${fa(page + 1)}/${fa(pages)}`, "m:noop"));
+    if (page < pages - 1) nav.push(btn("بعدی ▶️", `r:eds:${page + 1}`));
+    rows.push(nav);
+  }
+  rows.push([btn("🔙 دسته‌های کلی", "r:edp:0"), btn("🏠 منو", "m:home")]);
+  return panel(env, chatId, msg,
+    `🏷 <b>${esc(root.name)}</b> · ${rangeLabel(st.range)}\nکل دسته یا یکی از زیردسته‌ها را انتخاب کن:`,
+    { inline_keyboard: rows });
+}
+
+async function expenseDetailFormatMenu(env, chatId, msg, st) {
+  const categories = await listCategories(env, true);
+  const root = expenseDetailRoots(categories).find((item) => idEq(item.id, st.rootId));
+  if (!root) return expenseDetailRootMenu(env, chatId, msg, st);
+  const selected = categories.find((item) => idEq(item.id, st.categoryId));
+  if (!selected || !categoryDescendantIds(categories, root.id).has(compactId(selected.id)))
+    return expenseDetailCategoryMenu(env, chatId, msg, st);
+  const label = idEq(selected.id, root.id)
+    ? `${root.name} و زیردسته‌ها`
+    : categoryPathMap(categories).get(compactId(selected.id))?.label || selected.name;
+  return panel(env, chatId, msg,
+    `📎 <b>ریزهزینه‌های ${esc(label)}</b> · ${rangeLabel(st.range)}\nهر تراکنش با تاریخ و جزئیات در یک ردیف نمایش داده می‌شود. قالب فایل را انتخاب کن:`,
+    { inline_keyboard: [
+      [btn("📄 فایل PDF", "r:edf:pdf"), btn("📊 فایل CSV", "r:edf:csv")],
+      [btn("🔙 انتخاب دسته", `r:edr:${compactId(root.id)}`), btn("🏠 منو", "m:home")],
+    ] });
 }
 
 async function afterRange(env, chatId, msg, st) {
@@ -4635,6 +4766,9 @@ async function runReport(env, chatId, msg, st, mode, format = "csv") {
   await clearPreviousReportFiles(env, chatId);
   await panel(env, chatId, msg, "⏳ در حال ساخت گزارش…");
   const list = st.ent === "all" ? ENT_ORDER : [st.ent];
+  const anotherReport = st.expenseDetail
+    ? btn("📑 ریزهزینهٔ دیگر", "r:ed")
+    : btn("📤 گزارش دیگر", "m:csv");
   let sent = 0;
   let failed = 0;
   for (const e of list) {
@@ -4642,6 +4776,8 @@ async function runReport(env, chatId, msg, st, mode, format = "csv") {
       const r =
         mode === "expensecat"
           ? await buildExpenseCategoryReport(env, st.range)
+          : st.expenseDetail
+          ? await buildExpenseCategoryDetail(env, st.range, st.rootId, st.categoryId)
           : mode === "detail"
           ? await buildDetail(env, e, st.range, e === "t" ? st.txType : null)
           : await buildSummary(env, e, st.range, mode, e === "t" ? st.txType : null);
@@ -4683,15 +4819,16 @@ async function runReport(env, chatId, msg, st, mode, format = "csv") {
       {
         reply_markup: {
           inline_keyboard: [
-            [btn("📤 تلاش دوباره", "m:csv"), btn("🏠 منو", "m:home")],
+            [anotherReport, btn("🏠 منو", "m:home")],
           ],
         },
       },
     );
   }
   if (!sent) {
-    const target =
-      st.ent === "all"
+    const target = st.expenseDetail
+      ? "در دستهٔ انتخاب‌شده"
+      : st.ent === "all"
         ? "در هیچ‌یک از بخش‌های انتخاب‌شده"
         : `در بخش «${ENT[st.ent].fa}»`;
     return send(
@@ -4701,7 +4838,7 @@ async function runReport(env, chatId, msg, st, mode, format = "csv") {
       {
         reply_markup: {
           inline_keyboard: [
-            [btn("📤 گزارش دیگر", "m:csv"), btn("🏠 منو", "m:home")],
+            [anotherReport, btn("🏠 منو", "m:home")],
           ],
         },
       },
@@ -4710,7 +4847,7 @@ async function runReport(env, chatId, msg, st, mode, format = "csv") {
   return send(env, chatId, `✅ ${fa(sent)} فایل ارسال شد.`, {
     reply_markup: {
       inline_keyboard: [
-        [btn("📤 گزارش دیگر", "m:csv"), btn("🏠 منو", "m:home")],
+        [anotherReport, btn("🏠 منو", "m:home")],
       ],
     },
   });
@@ -4820,10 +4957,10 @@ function assetPurchaseTotals(purchases) {
   };
 }
 
-async function buildDetail(env, e, range, txType = null) {
+async function buildDetail(env, e, range, txType = null, selectedPages = null) {
   const ent = ENT[e];
   const schema = await getSchema(env, ent.key);
-  const pages = await fetchRows(env, e, range, txType);
+  const pages = selectedPages || await fetchRows(env, e, range, txType);
   const rel = await relationMap(env, schema, pages);
   const categoryPaths = e === "t"
     ? categoryPathMap(await listCategories(env, true))
@@ -4940,6 +5077,44 @@ async function buildDetail(env, e, range, txType = null) {
     csv: "\uFEFF" + lines.join("\r\n"),
     count: pages.length,
     ...(txType ? { title: `گزارش ریز تراکنش‌های ${txType} — ${rangeLabel(range)}` } : {}),
+  };
+}
+
+async function buildExpenseCategoryDetail(env, range, rootId, categoryId) {
+  if (!range) throw new Error("ماه گزارش انتخاب نشده است");
+  const categories = await listCategories(env, true);
+  const root = expenseDetailRoots(categories).find((item) => idEq(item.id, rootId));
+  const selected = categories.find((item) => idEq(item.id, categoryId));
+  if (!root || !selected ||
+      !categoryDescendantIds(categories, root.id).has(compactId(selected.id)))
+    throw new Error("دسته‌بندی انتخاب‌شده معتبر نیست");
+  const categoryIds = categoryDescendantIds(categories, selected.id);
+  const pages = await queryDb(env, "transactions", {
+    filter: {
+      and: [
+        { property: TX.type, select: { equals: "هزینه" } },
+        { property: TX.status, select: { equals: "ثبت‌شده" } },
+        { property: TX.date, date: { on_or_after: range.start } },
+        { property: TX.date, date: { on_or_before: range.end } },
+      ],
+    },
+    sorts: [
+      { property: TX.date, direction: "ascending" },
+      { timestamp: "created_time", direction: "ascending" },
+    ],
+    limit: MAX_EXPORT_ROWS,
+  });
+  const matching = pages.filter((page) =>
+    (page.properties?.[TX.category]?.relation || [])
+      .some((relation) => categoryIds.has(compactId(relation.id))));
+  const report = await buildDetail(env, "t", range, "هزینه", matching);
+  const label = idEq(selected.id, root.id)
+    ? `${root.name} و زیردسته‌ها`
+    : categoryPathMap(categories).get(compactId(selected.id))?.label || selected.name;
+  return {
+    ...report,
+    filename: `expense_detail_${rangeTag(range)}_${compactId(selected.id)}.csv`,
+    title: `ریزهزینه‌های ${label} — ${rangeLabel(range)}`,
   };
 }
 
