@@ -6564,17 +6564,24 @@ async function send(env, chatId, text, extra = {}) {
 }
 
 async function editPanel(env, msg, text, keyboard) {
-  const result = await tg(env, "editMessageText", {
-    chat_id: msg.chat.id,
-    message_id: msg.message_id,
-    text,
-    parse_mode: "HTML",
-    reply_markup: keyboard,
-  });
+  let result;
+  try {
+    result = await tg(env, "editMessageText", {
+      chat_id: msg.chat.id,
+      message_id: msg.message_id,
+      text,
+      parse_mode: "HTML",
+      reply_markup: keyboard,
+    });
+  } catch (error) {
+    if (/MESSAGE_ID_INVALID|message to edit not found/i.test(error.message))
+      return send(env, msg.chat.id, text, { reply_markup: keyboard });
+    throw error;
+  }
   await rememberActiveMenu(
     env,
     msg.chat.id,
-    result.message_id || msg.message_id,
+    result?.message_id || msg.message_id,
     !!keyboard?.inline_keyboard?.length,
   ).catch(() => {});
   return result;
