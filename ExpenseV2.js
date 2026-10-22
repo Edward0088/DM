@@ -3,6 +3,8 @@
 // Bindings / secrets:
 //   TELEGRAM_TOKEN, NOTION_TOKEN, WEBHOOK_SECRET
 //   ALLOWED_USER_ID            (الزامی؛ آیدی عددی تلگرام، چند آیدی با کاما)
+//   ALLOWED_USER_ID_Z          (اختیاری؛ آیدی کاربر دوم با اتصال Notion مستقل)
+//   NOTION_TOKEN_Z و شش شناسهٔ جدول NOTION_*_DB_ID_Z برای کاربر دوم
 //   NOTION_USERS_JSON          (اختیاری؛ Secret شامل تنظیمات Notion هر آیدی به‌جز کاربر اول)
 //                              {"TELEGRAM_ID":{"NOTION_TOKEN":"...","NOTION_TRANSACTIONS_DB_ID":"...",
 //                              "NOTION_ACCOUNTS_DB_ID":"...","NOTION_CATEGORIES_DB_ID":"...",
@@ -315,6 +317,8 @@ async function handleUpdate(update, env) {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+  const secondUserId = String(env.ALLOWED_USER_ID_Z || "").trim();
+  if (secondUserId) allowed.push(secondUserId);
 
   if (!from || !allowed.includes(String(from.id))) {
     if (update.callback_query) {
@@ -358,7 +362,13 @@ function notionEnvForUser(env, userId, legacyUserId) {
       throw new Error("NOTION_USERS_JSON معتبر نیست");
     }
   }
-  const config = users[userId];
+  let config = users[userId];
+  if (!config && userId === String(env.ALLOWED_USER_ID_Z || "").trim()) {
+    config = Object.fromEntries(
+      ["NOTION_TOKEN", ...Object.values(DB)]
+        .map((name) => [name, env[`${name}_Z`]]),
+    );
+  }
   if (!config) {
     if (userId === legacyUserId) return env;
     throw new Error("اتصال Notion برای این کاربر تنظیم نشده است");
