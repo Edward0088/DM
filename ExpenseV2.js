@@ -3,6 +3,11 @@
 // Bindings / secrets:
 //   TELEGRAM_TOKEN, NOTION_TOKEN, WEBHOOK_SECRET
 //   ALLOWED_USER_ID            (الزامی؛ آیدی عددی تلگرام، چند آیدی با کاما)
+//   NOTION_USERS_JSON          (اختیاری؛ Secret شامل تنظیمات Notion هر آیدی به‌جز کاربر اول)
+//                              {"TELEGRAM_ID":{"NOTION_TOKEN":"...","NOTION_TRANSACTIONS_DB_ID":"...",
+//                              "NOTION_ACCOUNTS_DB_ID":"...","NOTION_CATEGORIES_DB_ID":"...",
+//                              "NOTION_BOXES_DB_ID":"...","NOTION_ALLOCATIONS_DB_ID":"...",
+//                              "NOTION_ASSETS_DB_ID":"..."}}
 //   NOTION_TRANSACTIONS_DB_ID, NOTION_ACCOUNTS_DB_ID, NOTION_CATEGORIES_DB_ID,
 //   NOTION_BOXES_DB_ID, NOTION_ALLOCATIONS_DB_ID, NOTION_ASSETS_DB_ID
 //   DB                         (D1 binding برای ذخیره‌ی وضعیت مکالمه‌ها)
@@ -304,7 +309,7 @@ async function setup(url, env) {
 }
 
 async function handleUpdate(update, env) {
-  assertEnv(env);
+  if (!env.TELEGRAM_TOKEN) throw new Error("TELEGRAM_TOKEN تنظیم نشده");
   const from = update.message?.from ?? update.callback_query?.from;
   const allowed = String(env.ALLOWED_USER_ID || "")
     .split(",")
@@ -329,8 +334,44 @@ async function handleUpdate(update, env) {
     return;
   }
 
-  if (update.callback_query) return handleCallback(update.callback_query, env);
-  if (update.message?.text) return handleText(update.message, env);
+  const chat = update.message?.chat ?? update.callback_query?.message?.chat;
+  if (chat?.type !== "private" || String(chat.id) !== String(from.id)) {
+    if (update.callback_query)
+      await tg(env, "answerCallbackQuery", { callback_query_id: update.callback_query.id });
+    return;
+  }
+
+  const userEnv = notionEnvForUser(env, String(from.id), allowed[0]);
+  assertEnv(userEnv);
+  if (update.callback_query) return handleCallback(update.callback_query, userEnv);
+  if (update.message?.text) return handleText(update.message, userEnv);
+}
+
+function notionEnvForUser(env, userId, legacyUserId) {
+  let users = {};
+  if (env.NOTION_USERS_JSON) {
+    try {
+      users = JSON.parse(env.NOTION_USERS_JSON);
+      if (!users || Array.isArray(users) || typeof users !== "object")
+        throw new Error("invalid user map");
+    } catch {
+      throw new Error("NOTION_USERS_JSON معتبر نیست");
+    }
+  }
+  const config = users[userId];
+  if (!config) {
+    if (userId === legacyUserId) return env;
+    throw new Error("اتصال Notion برای این کاربر تنظیم نشده است");
+  }
+  const scoped = Object.create(env);
+  for (const name of ["NOTION_TOKEN", ...Object.values(DB)]) {
+    const value = config[name];
+    if (typeof value !== "string" || !value.trim())
+      throw new Error(`تنظیم ${name} برای این کاربر کامل نیست`);
+    scoped[name] = value.trim();
+  }
+  for (const key of Object.keys(DB)) dbId(scoped, key);
+  return scoped;
 }
 
 /* ============================== Text ============================== */
