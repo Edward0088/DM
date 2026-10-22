@@ -5029,6 +5029,7 @@ async function buildExpenseCategoryReport(env, range) {
     csv: "\uFEFF" + lines.join("\r\n"),
     count: rows.length,
     title: `گزارش هزینه‌ها بر اساس دسته‌بندی — ${rangeLabel(range)}`,
+    totalExpenseToman: tomanPlain(total),
     chartData: rows.map((row) => ({
       label: row.label,
       amount: tomanPlain(row.amount),
@@ -5362,7 +5363,7 @@ function reportHtml(report, ent, label, fonts = null) {
     "#0ea5e9", "#6366f1", "#8b5cf6", "#ec4899", "#f97316", "#14b8a6",
   ];
   const parentChart = report.parentChartData?.length
-    ? `<section class="chart parent-chart"><div class="chart-heading"><div><h2>جمع هزینه به تفکیک دسته مادر</h2><p>سهم هر گروه از کل هزینه‌های این بازه</p></div><span class="chart-total">${formatPdfToman(tomanPlain(report.parentChartData.reduce((sum, item) => sum + Number(item.amount || 0), 0)))} تومان</span></div><div class="chart-rows">${report.parentChartData
+    ? `<section class="chart parent-chart"><div class="chart-heading"><div><h2>جمع هزینه به تفکیک دسته مادر</h2><p>سهم هر گروه از کل هزینه‌های این بازه</p></div><span class="chart-total">${formatPdfToman(report.totalExpenseToman)} تومان</span></div><div class="chart-rows">${report.parentChartData
         .map((item, index) => {
           const width = Math.max(0, Math.min(100, Number(item.percent) || 0));
           return `<div class="chart-row parent-row"><div class="chart-label">${htmlEsc(item.label)}<small>${fa(item.childCount)} زیردسته</small></div><div class="chart-track"><div class="chart-bar" style="width:${width}%;background:${barColors[index % barColors.length]}"></div></div><div class="chart-value">${formatPdfToman(item.amount)} <small>تومان · ${fa(Number(item.percent || 0).toFixed(1))}٪</small></div></div>`;
