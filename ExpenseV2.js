@@ -933,13 +933,8 @@ async function handleTxCallback(env, msg, action, args) {
 
   if (action === "cancel") {
     await clearState(env, chatId);
-    await cleanupMessages(env, chatId, msg.message_id);
-    return editPanel(
-      env,
-      msg,
-      mainMenuText("عملیات لغو شد."),
-      mainMenuKeyboard(),
-    );
+    await cleanupMessages(env, chatId);
+    return sendMainMenu(env, chatId, "عملیات لغو شد.");
   }
 
   if (!state || state.flow !== "tx") {
@@ -6778,17 +6773,20 @@ async function cleanupMessages(env, chatId, keepId = null) {
   } catch {
     ids = [];
   }
+  const remaining = [];
   for (const id of ids) {
     if (Number(id) === Number(keepId)) continue;
-    await tg(env, "deleteMessage", { chat_id: chatId, message_id: id }).catch(
-      () => {},
-    );
+    try {
+      await tg(env, "deleteMessage", { chat_id: chatId, message_id: id });
+    } catch {
+      remaining.push(Number(id));
+    }
   }
-  const kept = keepId ? [Number(keepId)] : [];
+  if (keepId) remaining.push(Number(keepId));
   await env.DB.prepare(
     "INSERT INTO kv(k,v,exp) VALUES(?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v, exp=excluded.exp",
   )
-    .bind(key, JSON.stringify(kept), Date.now() + 7 * 24 * 60 * 60 * 1000)
+    .bind(key, JSON.stringify(remaining.slice(-UI_MESSAGE_LIMIT)), Date.now() + 7 * 24 * 60 * 60 * 1000)
     .run();
   await env.DB.prepare("DELETE FROM kv WHERE k=?")
     .bind(`ui:menus:${chatId}`)
