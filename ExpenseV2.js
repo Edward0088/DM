@@ -438,13 +438,9 @@ async function handleTextMessage(msg, env) {
     state.descriptionDone = true;
     await setState(env, chatId, state);
     let nextMessage;
-    if (!state.draft.accountCharge) {
-      state.step = "amount-choice";
-      await setState(env, chatId, state);
-      nextMessage = await askTxAmount(env, chatId, state);
-    } else {
-      nextMessage = await continueTxFlow(env, chatId, state);
-    }
+    state.step = "amount-choice";
+    await setState(env, chatId, state);
+    nextMessage = await askTxAmount(env, chatId, state);
     await deleteMessagesById(env, chatId, descriptionPromptIds).catch(
       () => {},
     );
@@ -961,14 +957,9 @@ async function handleTxCallback(env, msg, action, args) {
     state.draft.desc = "";
     state.descriptionDone = true;
     let nextMessage;
-    if (!state.draft.accountCharge) {
-      state.step = "amount-choice";
-      await setState(env, chatId, state);
-      nextMessage = await askTxAmount(env, chatId, state);
-    } else {
-      await setState(env, chatId, state);
-      nextMessage = await continueTxFlow(env, chatId, state);
-    }
+    state.step = "amount-choice";
+    await setState(env, chatId, state);
+    nextMessage = await askTxAmount(env, chatId, state);
     await deleteMessagesById(env, chatId, descriptionPromptIds).catch(
       () => {},
     );
