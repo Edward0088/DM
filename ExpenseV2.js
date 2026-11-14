@@ -279,7 +279,10 @@ async function processUpdate(update, env) {
   try {
     await handleUpdate(update, env);
   } catch (err) {
-    console.error(err);
+    console.error("Update failed", {
+      message: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
     const chatId =
       update.message?.chat?.id ?? update.callback_query?.message?.chat?.id;
     if (chatId)
@@ -6540,10 +6543,12 @@ async function tg(env, method, body) {
   });
   const data = await res.json();
   if (
-    !data.ok &&
+    (!res.ok || !data.ok) &&
     !String(data.description).includes("message is not modified")
   ) {
-    throw new Error(`Telegram ${method}: ${data.description}`);
+    throw new Error(
+      `Telegram ${method} failed (HTTP ${res.status}): ${data.description || "unknown error"}`,
+    );
   }
   return data.result;
 }
