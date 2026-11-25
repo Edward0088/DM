@@ -465,6 +465,11 @@ async function handleTextMessage(msg, env) {
     }
     state.draft.title = text;
     state.draft.date = todayTehran();
+    if (state.draft.accountCharge) {
+      state.step = "amount-choice";
+      await setState(env, chatId, state);
+      return askTxAmount(env, chatId, state);
+    }
     state.step = "description-input";
     await setState(env, chatId, state);
     const descriptionPrompt = await send(
@@ -491,6 +496,10 @@ async function handleTextMessage(msg, env) {
     state.draft.desc = text.slice(0, 2000);
     state.descriptionDone = true;
     await setState(env, chatId, state);
+    if (state.draft.accountCharge && state.draft.amount) {
+      await deleteMessagesById(env, chatId, descriptionPromptIds).catch(() => {});
+      return continueTxFlow(env, chatId, state);
+    }
     let nextMessage;
     state.step = "amount-choice";
     await setState(env, chatId, state);
@@ -1005,6 +1014,11 @@ async function handleTxCallback(env, msg, action, args) {
     delete state.descriptionPromptIds;
     state.draft.desc = "";
     state.descriptionDone = true;
+    if (state.draft.accountCharge && state.draft.amount) {
+      await setState(env, chatId, state);
+      await deleteMessagesById(env, chatId, descriptionPromptIds).catch(() => {});
+      return continueTxFlow(env, chatId, state, msg);
+    }
     let nextMessage;
     state.step = "amount-choice";
     await setState(env, chatId, state);
